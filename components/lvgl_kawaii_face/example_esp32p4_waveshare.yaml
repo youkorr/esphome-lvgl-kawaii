@@ -1,0 +1,101 @@
+# =============================================================================
+# Kawaii Face + Voice Assistant — Waveshare ESP32-P4 7" (LVGL 9.5 + PPA)
+# =============================================================================
+#
+# Blocs à FUSIONNER dans ta config existante (ex. "waveshare (3).yaml").
+# N'écrase pas ton display/psram/wifi/api/microphone/speaker — ajoute seulement
+# ce qui suit. Calé sur : mipi_dsi 1024x600, rotation 180, color_depth 16
+# (RGB565), use_ppa: true, wake word "okay_nabu".
+#
+# Compatibilité P4 + PPA (vérifiée dans le composant lvgl du dépôt) :
+#   - Les canvas du visage sont en RGB565, comme color_depth: 16.
+#   - PPA évalue chaque tâche et retombe en software si un buffer n'est pas
+#     aligné / rect arrondi / opacité — aucun crash. La rotation PPA du
+#     framebuffer (le vrai gain) n'est pas affectée.
+#   - Ton camera_canvas 640x480 prouve déjà que canvas + PPA fonctionnent ici.
+# =============================================================================
+
+# --- 1. Ajoute lvgl_kawaii_face à TA liste de composants externes -----------
+# (tu tires déjà lvgl/image/font de ton dépôt ; ajoute juste lvgl_kawaii_face)
+external_components:
+  - source: github://youkorr/esphome-lvgl-kawaii
+    components: [lvgl_kawaii_face]
+  - source: github://youkorr/lvgl_9.5
+    components: [lvgl, image, font]
+
+# --- 2. Rappel : ton bloc display/lvgl reste tel quel -----------------------
+# display:
+#   - platform: mipi_dsi
+#     id: main_display
+#     model: WAVESHARE-ESP32-P4-WIFI6-TOUCH-LCD-7B
+#     rotation: 180
+#     dimensions: { width: 1024, height: 600 }
+#
+# lvgl:
+#   use_ppa: true
+#   byte_order: little_endian
+#   color_depth: 16          # défaut sur mipi_dsi (RGB565)
+#   displays: [main_display]
+#   touchscreens: [touch]
+#   pages:
+#     ...
+
+# --- 3. Ajoute un panneau hôte pour le visage sur une page ------------------
+# Place ce widget `obj` dans une de tes pages (ou crée une page dédiée).
+# Le visage le remplit et se met à l'échelle automatiquement.
+#
+#   pages:
+#     - id: page_assistant
+#       bg_color: 0x000000
+#       widgets:
+#         - obj:
+#             id: face_panel
+#             width: 320
+#             height: 320
+#             align: CENTER
+#             bg_opa: TRANSP
+#             border_width: 0
+#             pad_all: 0
+
+# --- 4. Le composant kawaii face --------------------------------------------
+lvgl_kawaii_face:
+  id: face
+  parent_id: face_panel       # l'id du widget obj ci-dessus
+  initial_emotion: neutral
+  animation_speed: 30ms
+  blink_interval: 3000ms
+  auto_blink: true
+  smooth: true
+  response_fallback: speaking
+  # Règles mots-clés -> émotion (sinon défauts FR/EN intégrés) :
+  # response_keywords:
+  #   sad:   ["désolé", "erreur", "je n'ai pas", "impossible"]
+  #   happy: ["bravo", "super", "c'est fait", "d'accord"]
+
+# --- 5. Câble la réaction dans TON voice_assistant existant -----------------
+# N'ajoute PAS un 2e bloc voice_assistant : insère ces actions dans tes
+# triggers existants (tu as déjà micro_wake_word: okay_nabu).
+#
+# voice_assistant:
+#   id: va
+#   micro_wake_word: mww
+#   ...
+#   on_wake_word_detected:
+#     - lvgl.page.show: page_assistant
+#     - lvgl_kawaii_face.set_emotion: { id: face, emotion: excited }
+#   on_listening:
+#     - lvgl_kawaii_face.set_emotion: { id: face, emotion: listening }
+#   on_stt_end:
+#     - lvgl_kawaii_face.set_emotion: { id: face, emotion: thinking }
+#   on_tts_start:                                   # suit le contenu de la réponse
+#     - lvgl_kawaii_face.set_emotion_from_text: { id: face, text: !lambda 'return x;' }
+#   on_error:
+#     - lvgl_kawaii_face.set_emotion: { id: face, emotion: error }
+#   on_end:
+#     - lvgl_kawaii_face.set_emotion: { id: face, emotion: neutral }
+
+# --- Note mémoire -----------------------------------------------------------
+# Les buffers de canvas du visage (~quelques dizaines de Ko à 320px) sont
+# alloués en RAM interne en priorité, puis PSRAM en repli — les deux sont
+# accessibles par PPA et gérés en cache. Augmente la taille du panneau si tu
+# veux un plus grand visage (la PSRAM prend le relais).
