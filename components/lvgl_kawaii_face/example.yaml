@@ -1,0 +1,149 @@
+# =============================================================================
+# Exemple : Kawaii Face réactif au Voice Assistant (ESPHome + LVGL 9)
+# =============================================================================
+#
+# Le visage kawaii change d'expression selon les phases du pipeline
+# voice_assistant de Home Assistant :
+#
+#   wake word détecté   -> excited     (le visage se réveille)
+#   écoute              -> listening   (yeux grands ouverts, attentif)
+#   traitement (STT)    -> thinking    (concentré, réfléchit)
+#   réponse (TTS)       -> suit le CONTENU de la réponse du LLM (voir on_tts_start)
+#   fin / idle          -> neutral     (au repos)
+#   erreur              -> error       (triste)
+#
+# Pour la réponse, l'action set_emotion_from_text analyse le texte prononcé et
+# choisit l'expression (mots-clés -> émotion). Des règles FR/EN par défaut sont
+# intégrées ; personnalisez-les via `response_keywords:` ci-dessous.
+#
+# Les 17 expressions du composant sont utilisables directement :
+#   neutral, happy, worried, sad, surprised, angry, sleepy, wink, love,
+#   playful, silly, smirk, cry, working_hard, excited, confused, cool
+#
+# Alias pratiques (pensés pour le voice assistant) :
+#   idle -> neutral, listening -> surprised, thinking -> working_hard,
+#   speaking/talking -> happy, error -> sad
+#
+# Note : l'init du display, du microphone et de l'api/wifi est spécifique à
+# votre carte — seules les parties pertinentes (lvgl, composant, voice
+# assistant) sont montrées ici.
+# =============================================================================
+
+# --- 1. Composant externe ---
+external_components:
+  - source: github://youkorr/esphome-lvgl-kawaii
+    components: [lvgl_kawaii_face]
+  - source: github://youkorr/lvgl_9.5
+    components: [lvgl, image, font]
+
+# --- 2. Panneau LVGL qui accueille le visage ---
+# Le visage remplit automatiquement ce panneau et se met à l'échelle.
+# Donnez-lui la taille/position voulues ; fond transparent, sans bordure.
+lvgl:
+  pages:
+    - id: page_face
+      widgets:
+        - obj:
+            id: face_panel
+            width: 240
+            height: 240
+            align: CENTER
+            bg_opa: TRANSP
+            border_width: 0
+            pad_all: 0
+
+# --- 3. Le composant kawaii face ---
+# parent_id  : l'id du widget LVGL ci-dessus (omettez-le pour remplir l'écran)
+# smooth     : true = transitions douces entre expressions
+lvgl_kawaii_face:
+  id: face
+  parent_id: face_panel
+  initial_emotion: neutral
+  animation_speed: 30ms
+  blink_interval: 3000ms
+  auto_blink: true
+  smooth: true
+  # Émotion par défaut si la réponse ne matche aucun mot-clé (par défaut: speaking)
+  response_fallback: speaking
+  # Optionnel : surcharger les règles mots-clés -> émotion (sinon défauts FR/EN).
+  # Évaluées dans l'ordre déclaré, premier mot-clé trouvé gagne (insensible à la casse).
+  # response_keywords:
+  #   sad: ["désolé", "erreur", "je n'ai pas", "impossible", "sorry", "error"]
+  #   happy: ["bravo", "super", "c'est fait", "d'accord", "done", "great"]
+  #   confused: ["je ne comprends", "pas sûr", "not sure"]
+  #   love: ["je t'aime", "i love you"]
+  #   surprised: ["attention", "alerte", "warning"]
+
+# --- 4. Voice Assistant : le visage réagit à chaque phase ---
+# Reprend les triggers standard du composant voice_assistant.
+# Ajoutez simplement les actions `lvgl_kawaii_face.set_emotion` à VOS triggers
+# existants si vous avez déjà un bloc voice_assistant.
+voice_assistant:
+  id: va
+  # microphone: mic        # <- votre microphone
+  # media_player: speaker  # <- votre media_player / speaker
+
+  on_wake_word_detected:
+    - lvgl.page.show: page_face
+    - lvgl_kawaii_face.set_emotion:
+        id: face
+        emotion: excited
+
+  on_listening:
+    - lvgl_kawaii_face.set_emotion:
+        id: face
+        emotion: listening
+
+  on_stt_end:
+    - lvgl_kawaii_face.set_emotion:
+        id: face
+        emotion: thinking
+
+  # La face suit le CONTENU de la réponse du LLM : `x` = le texte prononcé.
+  on_tts_start:
+    - lvgl_kawaii_face.set_emotion_from_text:
+        id: face
+        text: !lambda return x;
+
+  on_tts_end:
+    - lvgl_kawaii_face.set_emotion:
+        id: face
+        emotion: happy
+
+  on_error:
+    - lvgl_kawaii_face.set_emotion:
+        id: face
+        emotion: error
+
+  on_end:
+    - lvgl_kawaii_face.set_emotion:
+        id: face
+        emotion: neutral
+
+  on_idle:
+    - lvgl_kawaii_face.set_emotion:
+        id: face
+        emotion: neutral
+
+# --- 5. Astuce : choisir l'expression dynamiquement (lambda) ---
+#
+# L'émotion est "templatable", donc vous pouvez la calculer :
+#
+#   - lvgl_kawaii_face.set_emotion:
+#       id: face
+#       emotion: !lambda |-
+#         return id(some_switch).state ? "love" : "neutral";
+#
+# --- 6. Déclencher depuis Home Assistant (sans voice assistant) ---
+#
+# Exposez une action / un script et appelez set_emotion depuis vos automations
+# HA existantes, par ex. sur réception d'une notification :
+#
+#   text_sensor:
+#     - platform: homeassistant
+#       id: notification_text          # <- celui qui EXISTE DÉJÀ
+#       entity_id: sensor.notifications
+#       on_value:
+#         - lvgl_kawaii_face.set_emotion:
+#             id: face
+#             emotion: surprised
