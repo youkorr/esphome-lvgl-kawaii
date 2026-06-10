@@ -2,9 +2,9 @@
 
 ![Kawaii face demo](<https://raw.githubusercontent.com/youkorr/lvgl_9.5/claude/jolly-lamport-ERZOC/dist/esphome-lvgl-kawaii/docs/kawaii_face_demo.gif>)
 
-Un visage *kawaii* animé pour écran **LVGL 9** (ESP32 / **ESP32‑P4**) qui **réagit au Voice Assistant** de Home Assistant : il se réveille, écoute, réfléchit, parle — et change même d'humeur selon **le contenu de la réponse** du LLM.
+An animated *kawaii* face for **LVGL 9** displays (ESP32 / **ESP32‑P4**) that **reacts to the Home Assistant Voice Assistant**: it wakes up, listens, thinks, speaks — and even changes its mood based on **what the assistant replies**.
 
-> Intégration ESPHome du composant C [`0015/lvgl_kawaii_face`](<https://github.com/0015/lvgl_kawaii_face>) (Eric Nam). Licence MIT.
+> ESPHome integration of the [`0015/lvgl_kawaii_face`](<https://github.com/0015/lvgl_kawaii_face>) C component by Eric Nam. MIT licensed.
 
 ## 17 expressions
 `neutral` · `happy` · `worried` · `sad` · `surprised` · `angry` · `sleepy` · `wink` · `love` · `playful` · `silly` · `smirk` · `cry` · `working_hard` · `excited` · `confused` · `cool`
@@ -12,9 +12,12 @@ Un visage *kawaii* animé pour écran **LVGL 9** (ESP32 / **ESP32‑P4**) qui **
 ## Installation
 ```yaml
 external_components:
+  - source: github://youkorr/esphome-lvgl-kawaii
+    components: [lvgl_kawaii_face]
   - source:
       type: git
-      url: <https://github.com/youkorr/esphome-lvgl-kawaii>
-      ref: main
-    components: [lvgl_kawaii_face]
+      url: <https://github.com/youkorr/lvgl_9.5>
+      ref: claude/jolly-lamport-ERZOC
+    components: [lvgl]
+
 
