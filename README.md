@@ -14,7 +14,7 @@ Un visage *kawaii* animé pour écran **LVGL 9** (ESP32 / **ESP32‑P4**) qui **
 external_components:
   - source:
       type: git
-      url: <https://github.com/youkorr/lvgl_9.5>
-      ref: claude/jolly-lamport-ERZOC
-    components: [lvgl, lvgl_kawaii_face]
+      url: <https://github.com/youkorr/esphome-lvgl-kawaii>
+      ref: main
+    components: [lvgl_kawaii_face]
 
