@@ -25,14 +25,21 @@
 
 static inline void *face_malloc_canvas(size_t size)
 {
-    void *p = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (p)
-        return p;
+    void *p = NULL;
 #if defined(CONFIG_SPIRAM)
+    /* Prefer PSRAM for the (relatively large) canvas buffers. They are
+     * software-rendered by LVGL and do NOT need to be DMA-capable, so keeping
+     * them out of the scarce internal SRAM leaves room for the SPI/LCD driver's
+     * DMA buffers, which can only live in internal RAM. This prevents boot-time
+     * "failed to allocate tx buffer" / "DMA descriptor failed" errors on
+     * memory-tight boards such as the ESP32-S3-Box. */
     p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (p)
         return p;
 #endif
+    p = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (p)
+        return p;
     return malloc(size);
 }
 #define FACE_MALLOC_CANVAS(size) face_malloc_canvas(size)
