@@ -1,0 +1,540 @@
+substitutions:
+  name: lvgl-kawaii-face
+  friendly_name: LVGL_Kawaii_Face
+  background_color: 0x000000
+  text_color: 0xFFFFFF
+  text_color_secondary: 0x767676
+
+  micro_wake_word_model: okay_nabu
+
+
+
+
+  allowed_characters: " []¿?¡!#%'()+,-—_./:µ³°ªº0123456789ABCDEFGHIJKLMNÑOPQRSTUVWXYZabcdefghijklmnñopqrstuvwxyzáéíóúÁÉÍÓÚäëïöüàâçèêîôùûÀÂÇÈÊÎÔÙÛ"
+  font_glyphsets: "GF_Latin_Core"
+  
+  # for Greek use "Noto Sans" for other languages use a compatible font family
+  font_family: Figtree  
+  
+  frigate: "http://192.168.1.38:8123/local/snapshots/last_snapshot.jpg"
+  #frigate1: rtsp://Tapoone:Tapoone132@192.168.1.56:554/stream1
+ 
+  media_player_entity: "media_player.waveshare_esp32_p4_media_player"
+  weather_entity: weather.forecast_maison #weather
+
+  icon_ha: https://aguacatec.es/wp-content/uploads/2026/04/icon_ha.png
+
+  # Ken Burns animation parameters
+  anim_duration_ms: "3000"   # Duration of one zoom+pan phase (ms)
+  zoom_start: "256"          # 1.0x (Pas de zoom au début)
+  zoom_end: "332"            # ~1.3x (Zoom maximum à l'arrivée         # ~1.4x (256 * 1.4 = 358)
+  pan_range_x: "200"   # pixels to pan on X axis 160
+  pan_range_y: "90"          # pixels to pan on Y axis 90
+  
+  power_icon:        "\U0000e909"
+  play_icon:         "\U0000e90a"
+  pause_icon:        "\U0000e90b"
+  back_step_icon:    "\U0000e90c"
+  forward_step_icon: "\U0000e90d"
+  volume_off_icon:   "\U0000e90e"
+  volume_on_icon:    "\U0000e90f"
+  volume_minus_icon: "\U0000e910"
+  volume_plus_icon:  "\U0000e911"
+  repeat_all_icon:   "\U0000e912"
+  repeat_off_icon:   "\U0000e913"
+  repeat_one_icon:   "\U0000e914"
+  ha:                "\U0000e90b" # home assistant
+  ha_icon:           "\U000F07D0" # home assistant
+  humidity:          "\U0000e912" # humidity
+  humidity_icon:     "\U0000e938" 
+  temperature:       "\U0000e915" # temperature
+  temperature_icon:  "\U0000e939" 
+  tvoc:              "\U0000e914" # air quality
+  co2:               "\U0000e913" # co2
+  door:              "\U000F081A"
+  garage:            "\U000F06D9"
+  shutter:           "\U000F1A8B"
+  setting:           "\U000F08D6"
+  alarm:             "\U000F0BC4"
+  exit_icon:         "\U0000e902"
+  recognition:       "\U000F0C7B"
+  vlc:               "\U000F057C"
+  youtube:           "\U000F05C3"
+  application:       "\U000F0675"
+  call:              "\U000F0919" 
+ 
+
+  settings_icon:                 "\U0000e903"
+  info_icon:                     "\U0000e904"
+  devices_icon:                  "\U0000e905"
+  home_icon:                     "\U0000e906"
+  ceiling_icon:                  "\U0000e907"
+  lightbulb_icon:                "\U0000e908"
+  spotlight_group_icon:          "\U0000e915"
+  desk_lamp_icon:                "\U0000e916"
+  pendant_lamp_icon:             "\U0000e917" 
+  ceiling_lamp_icon:             "\U0000e918"
+  ceiling_lamp_variant_icon:     "\U0000e921"
+  night_lamp_icon:               "\U0000e919"
+  swipe_icon:                    "\U0000e91a"
+  brightness_icon:               "\U0000e900"
+ 
+
+  voice_assist_idle_phase_id: "1"
+  voice_assist_listening_phase_id: "2"
+  voice_assist_thinking_phase_id: "3"
+  voice_assist_replying_phase_id: "4"
+  voice_assist_not_ready_phase_id: "10"
+  voice_assist_error_phase_id: "11"
+  voice_assist_muted_phase_id: "12"
+  voice_assist_timer_finished_phase_id: "20"
+
+  loading_illustration_background_color: "000000"
+  idle_illustration_background_color: "000000"
+  listening_illustration_background_color: "FFFFFF"
+  thinking_illustration_background_color: "FFFFFF"
+  replying_illustration_background_color: "FFFFFF"
+  error_illustration_background_color: "000000"
+  timer_illustration_background_color: "FFFFFF"
+  
+  alarm_panel_entity:   "alarm_control_panel.alarmo" #"alarm_control_panel.security"
+  pin_code:             "1169"
+
+  unlock_pin_code: "1169" 
+
+  shield_home_icon:      "\U000F068A" # home
+  shield_away_icon:      "\U000F099D" # away
+  shield_night_icon:     "\U000F1828" # night
+  shield_vacation_icon:  "\U000F06BB" # vacation
+  shield_disarm_icon:    "\U000F099E" # disarmed
+  shield_arming_icon:    "\U000F0498" # arming
+  micro_sd:              "\U000F07DC"
+
+esphome:
+  name: lvgl-kawaii-face
+  friendly_name: lvgl-kawaii-face
+  #includes:
+    #- esp_wifi_tune.h 
+  on_boot:
+    priority: 850
+    then:
+      - logger.log: "Démarrage - Attente du montage de la carte SD..."
+      - delay: 5s
+      - logger.log: "Délai écoulé - Allumage du rétroéclairage"
+      - light.turn_on: backlight
+
+
+
+esp32:
+  #variant: esp32p4
+  flash_size: 32MB
+  board: esp32-p4-evboard
+  cpu_frequency: 360MHz
+  engineering_sample: true
+  framework:
+    type: esp-idf
+    #components:
+      #- espressif/esp-dsp==1.8.0
+    advanced:
+      enable_idf_experimental_features: true
+      disable_vfs_support_dir: false
+      #loop_task_stack_size: "16384" #"32768"
+      #disable_fatfs: False
+      include_builtin_idf_components:
+        - fatfs
+        - wear_levelling
+    sdkconfig_options:
+
+      CONFIG_COMPILER_OPTIMIZATION_PERF: y        # perf plutôt que taille
+      #CONFIG_CACHE_L2_CACHE_128KB: y              # + de cache L2
+      CONFIG_SPIRAM_XIP_FROM_PSRAM: y             # soulage le bus flash
+      #CONFIG_LCD_DSI_ISR_IRAM_SAFE: y             # pas de glitch DSI
+      CONFIG_GDMA_ISR_IRAM_SAFE: y    
+      
+      CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM: "y"
+      CONFIG_ESP_TASK_WDT_EN: "10"
+
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "n"
+      CONFIG_SPIRAM_RODATA: "n"
+      CONFIG_ESP32_SPIRAM_SUPPORT: "y"
+      CONFIG_SPIRAM_USE_MALLOC: "y"
+      CONFIG_FATFS_LFN_STACK: "y"
+      CONFIG_LWIP_SO_RCVBUF: "y"
+      CONFIG_LWIP_MAX_SOCKETS: "16"
+      CONFIG_VFS_SUPPORT_IO: "y"
+      CONFIG_VFS_MAX_COUNT: "16" 
+      CONFIG_ESP_MAIN_TASK_STACK_SIZE: "16384"
+      CONFIG_ESP_TIMER_TASK_STACK_SIZE: "4096"
+      #CONFIG_ESP_TASK_WDT_TIMEOUT_S: "60"
+      CONFIG_ESP_TASK_LOOP_STACK_SIZE: "16384"
+      CONFIG_FATFS_LFN_HEAP: "y"
+      #DCONFIG_USE_AUDIO_AAC_SUPPORT: "y"
+      DCONFIG_ESP_JPG_DECODE_ENABLE: "y"
+      DCONFIG_ESPHOME_ENABLE_PNGLE: "1"
+      CONFIG_SPIRAM_SPEED_200M: "y"  # ← NOUVEAU: 200 MHz au lieu de défaut
+      CONFIG_SPIRAM_SPEED: "200"
+
+      # Buffers WiFi distant (C6) + agrégation AMPDU = gros gain d'efficacité
+      CONFIG_WIFI_RMT_STATIC_RX_BUFFER_NUM: "16"
+      CONFIG_WIFI_RMT_DYNAMIC_RX_BUFFER_NUM: "64"
+      CONFIG_WIFI_RMT_DYNAMIC_TX_BUFFER_NUM: "64"
+      CONFIG_WIFI_RMT_AMPDU_TX_ENABLED: "y"
+      CONFIG_WIFI_RMT_TX_BA_WIN: "32"
+      CONFIG_WIFI_RMT_AMPDU_RX_ENABLED: "y"
+      CONFIG_WIFI_RMT_RX_BA_WIN: "32"
+      ## Buffers lwIP (UDP surtout pour toi)
+      CONFIG_LWIP_UDP_RECVMBOX_SIZE: "64"
+      CONFIG_LWIP_TCPIP_RECVMBOX_SIZE: "64"
+      CONFIG_LWIP_TCP_RECVMBOX_SIZE: "64"
+      CONFIG_LWIP_TCP_SND_BUF_DEFAULT: "65534"
+      CONFIG_LWIP_TCP_WND_DEFAULT: "65534"
+      CONFIG_LWIP_TCP_SACK_OUT: "y"   
+
+logger:
+
+api:
+  encryption:
+    key: "eA3unaomyBRTnYqkUigjfPJr2nqlMwXzox9XmAQ5Qis="
+
+ota:
+  - platform: esphome
+psram:
+  mode: hex
+  speed: 200MHz
+  
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: LVGL_Kawaii_Fac Fallback Hotspot
+    password: "lXNJRn4vERfL"
+
+captive_portal:
+
+http_request:
+
+online_image:
+  - url: "${frigate}"
+    format: JPG
+    id: cctv_img
+    byte_order: little_endian    
+    type: RGB565
+    resize: 1000x600 #450x300 #1000x700
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/youkorr/esphome-lvgl-kawaii
+      ref: claude/lvgl-kawaii-face-component-bvko4e
+    components: [lvgl_kawaii_face]
+    refresh: 0s
+
+  - source:
+      type: git
+      url: https://github.com/youkorr/lvgl_9.5
+      ref: claude/jolly-lamport-ERZOC #claude/mit-license-face-to-face-p9fc6m  #lvgl-ppa-msync-fix #claude/jolly-lamport-ERZOC  #6dc5b02f3e6940e782d12fd6748154c0c384272d #claude/jolly-lamport-ERZOC  #claude/fix-lottie-esp32-crash-K7tM1 #claude/fix-lottie-esp32-crashes-8gqrJ #claude/fix-lottie-esp32-crash-vVG5Y #claude/fix-lottie-esp32-crashes-8gqrJ #claude/investigate-pr-conflicts-jyqoy #claude/add-lvgl-example-GJsCN #claude/create-sphere-BVofQ # claude/home-assistant-integration-6apll
+    components: [lvgl, image, font]
+    refresh: 0s   
+
+esp32_hosted:
+  variant: ESP32C6
+  reset_pin: GPIO54
+  cmd_pin: GPIO19
+  clk_pin: GPIO18
+  d0_pin: GPIO14
+  d1_pin: GPIO15
+  d2_pin: GPIO16
+  d3_pin: GPIO17
+  active_high: true
+  use_psram: true
+  slot: 1
+
+i2c:
+  - id: bsp_bus
+    sda: GPIO07
+    scl: GPIO08
+    frequency: 400kHz 
+
+esp_ldo:
+  - voltage: 2.5V
+    channel: 3
+  - voltage: 2.5V
+    channel: 4  
+    
+output:
+  - platform: ledc
+    pin: GPIO32
+    id: backlight_pwm
+    frequency: 1000Hz
+    inverted: true
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm
+    name: "Display Backlight"
+    id: backlight
+    restore_mode: RESTORE_DEFAULT_ON
+    default_transition_length: 250ms
+# =============================================================================
+# I2S AUDIO CONFIGURATION (ES7210 + ES8311)
+# =============================================================================
+i2s_audio:
+  - id: audio_bus
+    i2s_mclk_pin: GPIO13
+    i2s_lrclk_pin: GPIO10
+    i2s_bclk_pin: GPIO12
+
+audio_dac:
+  - platform: es8311
+    id: es8311_dac
+    i2c_id: bsp_bus
+    address: 0x18
+
+audio_adc:
+  - platform: es7210
+    id: es7210_adc
+    i2c_id: bsp_bus
+    address: 0x40
+
+microphone:
+  - platform: i2s_audio
+    id: esp32_microphone
+    i2s_audio_id: audio_bus
+    i2s_din_pin: GPIO11
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    adc_type: external
+
+speaker:
+  - platform: i2s_audio
+    id: esp32_speaker
+    i2s_audio_id: audio_bus
+    i2s_dout_pin: GPIO9
+    audio_dac: es8311_dac
+    dac_type: external
+    channel: mono
+    buffer_duration: 500ms
+    bits_per_sample: 16bit
+    sample_rate: 48000
+
+  - platform: mixer
+    id: mixing_speaker
+    output_speaker: esp32_speaker
+    source_speakers:
+      - id: announcement_mixing_input
+        timeout: never
+      - id: media_mixing_input
+        timeout: never
+
+  - platform: resampler
+    id: announcement_resampling_speaker
+    output_speaker: announcement_mixing_input
+    sample_rate: 48000
+    bits_per_sample: 16
+
+  - platform: resampler
+    id: media_resampling_speaker
+    output_speaker: media_mixing_input
+    sample_rate: 48000
+    bits_per_sample: 16
+
+
+
+media_player:
+  - platform: speaker
+    name: "ESP32 P4 Media Player"
+    id: speaker_media_player
+    volume_min: 0.5
+    volume_max: 0.75
+    volume_increment: 0.05
+    announcement_pipeline:
+      speaker: announcement_resampling_speaker
+      format: FLAC
+      sample_rate: 48000
+      num_channels: 1
+    media_pipeline:
+      speaker: media_resampling_speaker
+      format: FLAC
+      num_channels: 1
+      sample_rate: 48000
+    on_announcement:
+      - if:
+          condition:
+            - microphone.is_capturing:
+          then:
+            - micro_wake_word.stop
+            - voice_assistant.stop
+      - mixer_speaker.apply_ducking:
+          id: media_mixing_input
+          decibel_reduction: 20
+          duration: 0.0s
+      - switch.turn_on: audio_amplifier
+      - delay: 100ms
+    on_state:
+      if:
+        condition:
+          and:
+            - not:
+                voice_assistant.is_running:
+            - not:
+                media_player.is_announcing:
+        then:
+          - mixer_speaker.apply_ducking:
+              id: media_mixing_input
+              decibel_reduction: 0
+              duration: 1.0s
+    on_play:
+      - logger.log: "Media player started playing, disabling microphone"
+      - switch.turn_on: audio_amplifier
+      - delay: 100ms
+      - micro_wake_word.stop
+      - voice_assistant.stop
+    on_idle:
+      - delay: 100ms
+      - switch.turn_off: audio_amplifier
+      - if:
+          condition:
+            not:
+              voice_assistant.is_running:
+          then:
+            - micro_wake_word.start
+
+
+
+micro_wake_word:
+  id: mww
+  models:
+    - okay_nabu
+#    - hey_mycroft
+#    - hey_jarvis
+  on_wake_word_detected:
+    - component.update: main_display
+    - voice_assistant.start:
+        wake_word: !lambda return wake_word;
+
+voice_assistant:
+  microphone: esp32_microphone
+  media_player: speaker_media_player
+  micro_wake_word: mww
+  noise_suppression_level: 2
+  auto_gain: 31dBFS
+  volume_multiplier: 2.0
+  conversation_timeout: 300s
+
+  on_start:
+    - component.update: main_display
+
+
+  on_listening:
+    - component.update: main_display
+
+  on_stt_end:
+    - component.update: main_display
+
+  on_tts_start:
+    - component.update: main_display
+
+  on_tts_end:
+    - component.update: main_display
+
+
+  # --- End of flow → idle ---
+  on_end:
+    - wait_until:
+        condition:
+          - media_player.is_announcing:
+        timeout: 0.5s
+    - wait_until:
+        - and:
+            - not:
+                media_player.is_announcing:
+            - not:
+                media_player.is_playing:
+    - component.update: main_display
+
+    - micro_wake_word.start:
+
+  on_error:
+    - component.update: main_display
+
+
+  on_client_connected:
+    - micro_wake_word.start:
+  on_client_disconnected:
+    - micro_wake_word.stop:
+
+switch:
+
+
+  - platform: gpio
+    pin: GPIO53 
+    name: "Audio Amplifier"
+    id: audio_amplifier
+    restore_mode: ALWAYS_OFF 
+
+
+touchscreen:
+  - platform: gt911
+    id: touch
+    i2c_id: bsp_bus
+    reset_pin: GPIO23
+    update_interval: 8ms   # polling (pas d'interruption)
+    on_touch:
+      - lambda: |-
+          ESP_LOGD("touchscreen", "Touch detected at (%d, %d)", touch.x, touch.y);
+      - light.turn_on: backlight 
+               
+    transform:
+      swap_xy: false
+      mirror_x: true
+      mirror_y: true   
+    
+display:
+  - platform: mipi_dsi
+    id: main_display
+    show_test_card: false
+    model: CUSTOM
+    update_interval: never
+    auto_clear_enabled: false
+    hsync_back_porch: 160
+    lane_bit_rate: 1000Mbps
+    color_order: rgb
+    lanes: 2
+    reset_pin:
+      number: 33
+    hsync_pulse_width: 70
+    hsync_front_porch: 160
+    vsync_back_porch: 23
+    vsync_pulse_width: 1
+    vsync_front_porch: 12
+    pclk_frequency: 51MHz 
+    dimensions:
+      width: 1024
+      height: 600     
+    init_sequence:   
+      - [0xB2, 0x10]
+      - [0x80, 0x8B]
+      - [0x81, 0x78]
+      - [0x82, 0x84]
+      - [0x83, 0x88]
+      - [0x84, 0xA8]
+      - [0x85, 0xE3]
+      - [0x86, 0x88]
+      - [0x11, 0x00]
+      - delay 120ms
+      - [0x29]
+
+lvgl:
+  use_ppa: true
+  use_ppa_img: true
+  color_depth: 16
+  buffer_size: 100%
+  byte_order: little_endian
+  fps_benchmark: true
+  perf_monitor: true
+  rotation: 180        
+    
+    
+  
+
+  
