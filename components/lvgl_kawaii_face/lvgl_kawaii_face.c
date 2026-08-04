@@ -339,7 +339,10 @@ esp_err_t face_animation_init(face_config_t *config)
     face_state.line_width = (uint8_t) fs(4);
 
     face_state.eye_cw = (uint16_t)(face_sz * 0.45f);
-    face_state.mouth_cw = (uint16_t)(face_sz * 0.45f);
+    /* Wide enough to hold the cheeks beside the mouth, where the GIF puts
+     * them (+/-0.354 of the face). The eye canvases end at 0.57 of the
+     * face and this one starts at 0.62, so nothing overlaps. */
+    face_state.mouth_cw = (uint16_t)(face_sz * 0.70f);
     face_state.mouth_ch = (uint16_t)(face_sz * 0.38f);
 
     FACE_LOGI(TAG, "Parent: %dx%d, face_sz: %u, eye: %upx, mouth: %ux%upx",
@@ -457,10 +460,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
     if (eye_height < fs(8))
         eye_height = fs(8);
     int16_t center_x = width / 2;
-    /* 0.6 left no room under the eye: the blush was drawn past the bottom
-     * edge of the canvas and clipped away entirely. 0.44 leaves enough for
-     * a rounded cheek instead of the flat bar 0.50 still gave. */
-    int16_t center_y = (height * 0.44f) + face_state.bounce_offset;
+    int16_t center_y = (height * 0.52f) + face_state.bounce_offset;
 
     lv_draw_line_dsc_t line_dsc;
     lv_draw_line_dsc_init(&line_dsc);
@@ -495,41 +495,6 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
 
     lv_draw_line(&layer, &line_dsc);
 
-    if (face_state.blush_intensity > 0)
-    {
-        lv_draw_rect_dsc_t blush_dsc;
-        lv_draw_rect_dsc_init(&blush_dsc);
-        blush_dsc.bg_color = lv_color_make(255, 150, 180);
-        /* GIF: alpha = 210 * blush, so it blends to a muted mauve on a dark
-         * background instead of the flat pink full opacity gave. */
-        blush_dsc.bg_opa = (face_state.blush_intensity * LV_OPA_COVER) / 140;
-        blush_dsc.radius = fs(8);
-        blush_dsc.border_width = 0;
-
-        blush_dsc.radius = LV_RADIUS_CIRCLE;
-
-        /* GIF: an ellipse 0.8 x 0.4 of the eye, sitting one eye-height below
-         * it. The eye canvas is square and the eye fills most of it, so the
-         * cheek gets whatever height is left under the eye — rounder than the
-         * clipped bar it was, still flatter than the GIF's. */
-        int16_t eye_bottom = center_y + eye_width / 2;
-        int16_t room = height - eye_bottom;
-        int16_t blush_hh = (room - fs(3)) / 2;
-        if (blush_hh < fs(3))
-            blush_hh = fs(3);
-        int16_t blush_hw = eye_width * 0.36f;
-        int16_t blush_cy = eye_bottom + fs(2) + blush_hh;
-        if (blush_cy + blush_hh > height - 1)
-            blush_cy = height - 1 - blush_hh;
-
-        lv_area_t blush_area;
-        blush_area.x1 = center_x - blush_hw;
-        blush_area.y1 = blush_cy - blush_hh;
-        blush_area.x2 = center_x + blush_hw;
-        blush_area.y2 = blush_cy + blush_hh;
-
-        lv_draw_rect(&layer, &blush_dsc, &blush_area);
-    }
 
     lv_draw_rect_dsc_t rect_dsc;
     lv_draw_rect_dsc_init(&rect_dsc);
@@ -943,9 +908,10 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
     lv_canvas_init_layer(canvas, &layer);
 
     int16_t center_x = width / 2;
-    /* GIF: half-width RW*0.11 of the frame, which is 0.38 of the face at
-     * the frame/face ratio the demo uses — i.e. the original value. */
-    int16_t mouth_width = width * 0.85;
+    /* GIF: half-width RW*0.11 of the frame = 0.38 of the face. The canvas is
+     * now 0.70 of the face rather than 0.45, so the ratio drops to keep the
+     * mouth exactly the size it was. */
+    int16_t mouth_width = width * 0.546;
 
     int16_t curve_offset = (height * curve) / 140;
 
@@ -1007,6 +973,42 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
     lv_draw_rect_dsc_init(&rect_dsc);
     lv_draw_line_dsc_t line_dsc;
     lv_draw_line_dsc_init(&line_dsc);
+
+    /* Cheeks. The GIF blushes happy, love and wink only, and places the
+     * patches either side of the mouth. They used to be drawn in the eye
+     * canvas, which had room for nothing but a flat clipped sliver under the
+     * eye — the wrong place and the wrong shape. */
+    if (face_state.blush_intensity > 0 &&
+        (face_state.current_emotion == FACE_HAPPY ||
+         face_state.current_emotion == FACE_LOVE ||
+         face_state.current_emotion == FACE_WINK))
+    {
+        lv_draw_rect_dsc_t blush_dsc;
+        lv_draw_rect_dsc_init(&blush_dsc);
+        blush_dsc.bg_color = lv_color_make(255, 150, 180);
+        /* GIF: alpha 210 * blush, which blends to a muted mauve. */
+        blush_dsc.bg_opa = (face_state.blush_intensity * LV_OPA_COVER) / 140;
+        blush_dsc.border_width = 0;
+        blush_dsc.radius = LV_RADIUS_CIRCLE;
+
+        /* The mouth reaches 0.273 of the canvas and its edge is at 0.50, so
+         * the cheeks live in the band between. 0.10 x 0.12 gives the GIF's
+         * 1.6 width-to-height ratio. */
+        int16_t cheek_hw = width * 0.10f;
+        int16_t cheek_hh = height * 0.12f;
+        int16_t cheek_dx = width * 0.39f;
+
+        for (int i = 0; i < 2; i++)
+        {
+            int16_t ccx = center_x + ((i == 0) ? -cheek_dx : cheek_dx);
+            lv_area_t cheek;
+            cheek.x1 = ccx - cheek_hw;
+            cheek.y1 = center_y - cheek_hh;
+            cheek.x2 = ccx + cheek_hw;
+            cheek.y2 = center_y + cheek_hh;
+            lv_draw_rect(&layer, &blush_dsc, &cheek);
+        }
+    }
 
     if (face_state.current_emotion == FACE_WORKING_HARD)
     {
@@ -1218,7 +1220,7 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
                          (int16_t)((height * 0.367f * curve) / 100),
                          (int16_t)(height * 0.11f));
 
-        if (curve < -50)
+        if (curve < -50 && face_state.current_emotion == FACE_CRY)
         {
             rect_dsc.bg_color = lv_color_make(150, 200, 255);
             rect_dsc.bg_opa = LV_OPA_70;
