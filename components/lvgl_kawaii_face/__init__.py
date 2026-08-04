@@ -132,8 +132,15 @@ async def to_code(config):
         # global at init time instead. kawaii_parent_obj() overloads over
         # lv_obj_t* / LvCompound* / LvPageType*, so a widget id and a page id
         # both work.
+        #
+        # The name must be fully qualified: the lambda is emitted into the
+        # generated setup() at global scope, and argument-dependent lookup
+        # cannot find it there — the arguments live in the global namespace
+        # (lv_obj_t) or in esphome::lvgl (LvPageType), never in ours.
         await cg.get_variable(parent_id)
-        getter = f"[]() -> lv_obj_t * {{ return kawaii_parent_obj({parent_id}); }}"
+        getter = (
+            f"[]() -> lv_obj_t * {{ return {kawaii_ns}::kawaii_parent_obj({parent_id}); }}"
+        )
         cg.add(var.set_parent_getter(cg.RawExpression(getter)))
 
     if (bg_color := config.get(CONF_BG_COLOR)) is not None:
