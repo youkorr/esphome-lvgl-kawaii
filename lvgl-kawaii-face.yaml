@@ -605,23 +605,22 @@ lvgl:
     - id: page_face
       bg_color: ${background_color}
       widgets:
-        # Le conteneur du visage. Sa taille définit celle du visage : le
-        # composant s'adapte tout seul (min(width, height)).
+        # Le conteneur du visage. Sa taille définit celle du visage :
+        # celui-ci fait min(width, height) et se centre dedans.
+        # ---> C'EST ICI QU'ON RÈGLE LA TAILLE DU VISAGE. <---
+        # 340 correspond à peu près au GIF de démo (300 px). Monte à 420/520
+        # pour un visage qui remplit l'écran de 1024x600.
         #
-        # Il a un fond OPAQUE clair : les canvas des yeux et de la bouche sont
-        # opaques, le composant reprend automatiquement la couleur du premier
-        # parent opaque comme « peau ». Sur un fond noir les sourcils (brun
-        # foncé) et le contour des yeux (noir) disparaîtraient — d'où cette
-        # plaque claire. Pour un visage sur fond noir : bg_opa: TRANSP ici.
+        # Fond transparent : le noir de la page traverse, et le composant
+        # reprend cette couleur pour les canvas des yeux/bouche. Le visage se
+        # pose donc directement sur l'écran sombre, comme dans le GIF.
         - obj:
             id: face_panel
-            width: 520
-            height: 520
+            width: 340
+            height: 340
             align: CENTER
             y: -20
-            bg_color: 0xF7F0E8
-            bg_opa: COVER
-            radius: 60
+            bg_opa: TRANSP
             border_width: 0
             pad_all: 0
 

@@ -140,6 +140,14 @@ typedef struct
     uint16_t mouth_ch;
 
     lv_color_t bg_color;
+    /* Strokes that would otherwise be drawn in near-black: the eyebrows and
+     * the closed-eye line. Picked from the background so the face reads on a
+     * dark panel as well as a light one. */
+    lv_color_t line_color;
+    uint8_t line_width;
+    /* The outline around the white of the eye. Zero on a dark background,
+     * where a black ring is invisible anyway (and the demo GIF has none). */
+    uint8_t eye_border_width;
     /* Set when a redraw was skipped because the face was off-screen, so the
      * canvases are refreshed as soon as its page is shown again. */
     bool redraw_pending;
@@ -168,6 +176,13 @@ static lv_color_t face_resolve_bg_color(lv_obj_t *parent)
             return lv_obj_get_style_bg_color(obj, LV_PART_MAIN);
     }
     return lv_color_white();
+}
+
+/* Rec. 601 luma — cheap, and enough to decide which palette reads better. */
+static bool face_bg_is_dark(lv_color_t c)
+{
+    uint16_t luma = (uint16_t)((c.red * 77 + c.green * 151 + c.blue * 28) >> 8);
+    return luma < 128;
 }
 
 /* Release everything face_animation_init() may have created so far. Callers
@@ -251,6 +266,22 @@ esp_err_t face_animation_init(face_config_t *config)
     face_state.bg_color = face_state.config.bg_color_set
                               ? face_state.config.bg_color
                               : face_resolve_bg_color(parent_obj);
+
+    if (face_bg_is_dark(face_state.bg_color))
+    {
+        /* Values from the demo GIF's dark mock-up (docs/make_demo_gif.py). */
+        face_state.line_color = lv_color_make(122, 137, 160);
+        face_state.eye_border_width = 0;
+    }
+    else
+    {
+        face_state.line_color = lv_color_make(80, 60, 40);
+        face_state.eye_border_width = 3;
+    }
+    /* Fixed at 4px the brows looked like hairlines on a large face. */
+    face_state.line_width = (uint8_t)(face_sz / 60);
+    if (face_state.line_width < 4)
+        face_state.line_width = 4;
 
     face_state.face_sz = face_sz;
     face_state.eye_cw = (uint16_t)(face_sz * 0.45f);
@@ -374,8 +405,8 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
 
     lv_draw_line_dsc_t line_dsc;
     lv_draw_line_dsc_init(&line_dsc);
-    line_dsc.color = lv_color_make(80, 60, 40);
-    line_dsc.width = 4;
+    line_dsc.color = face_state.line_color;
+    line_dsc.width = face_state.line_width;
     line_dsc.opa = LV_OPA_COVER;
 
     int8_t eyebrow_angle = is_left ? face_state.left_eyebrow_angle : face_state.right_eyebrow_angle;
@@ -551,7 +582,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         rect_dsc.bg_color = lv_color_white();
         rect_dsc.bg_opa = LV_OPA_COVER;
         rect_dsc.border_color = lv_color_black();
-        rect_dsc.border_width = 3;
+        rect_dsc.border_width = face_state.eye_border_width;
         rect_dsc.border_opa = LV_OPA_COVER;
         rect_dsc.radius = 15;
 
@@ -678,8 +709,10 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
     else
     {
 
-        line_dsc.color = lv_color_black();
-        line_dsc.width = 4;
+        /* Closed / almost-closed eye. Drawn in the palette colour: in black it
+         * vanished on a dark panel, so blinking made the eyes disappear. */
+        line_dsc.color = face_state.line_color;
+        line_dsc.width = face_state.line_width;
         line_dsc.opa = LV_OPA_COVER;
         line_dsc.round_start = 1;
         line_dsc.round_end = 1;

@@ -89,13 +89,36 @@ The face size follows the parent: it is `min(width, height)` of the parent
 object, centred in it. A parent with no size yet is retried for a few seconds,
 then reported as an error instead of silently rendering nowhere.
 
-### Background colour
+### Size
+
+The face is `min(width, height)` of `parent_id`, centred in it — so you size
+the face by sizing the parent object. Around **300–360** matches the look of
+the demo GIF; go bigger only if you want it to fill the screen.
+
+### Background colour and palette
 
 The eyes and mouth are drawn on opaque LVGL canvases, so they have to be
 cleared with the colour behind them or the face shows up as three rectangles.
 By default the component walks up from `parent_id` and takes the first
-ancestor with an opaque background — give your page a `bg_color` and it just
-works. Set `bg_color:` explicitly to override it.
+ancestor with an opaque background — give your page a `bg_color`, leave the
+panel `bg_opa: TRANSP`, and it just works. Set `bg_color:` to override it.
+
+That colour also selects the stroke palette, because the eyebrows and the
+closed-eye line would otherwise be drawn in near-black:
+
+| Background | Eyebrows / closed eye | Outline around the eye white |
+|---|---|---|
+| light | dark brown | 3 px black |
+| dark | grey-blue | none |
+
+So the face reads on a dark panel (the demo GIF's look) as well as a light
+one, with no configuration.
+
+> `docs/kawaii_face_demo.gif` is a **stylised Pillow mock-up, not a screen
+> capture** — see the header of `docs/make_demo_gif.py`. It illustrates the
+> palette and the emotion cycle; the on-device rendering is close in spirit
+> but not pixel-identical (the component draws into three canvases, so every
+> element lives inside an eye or mouth rectangle).
 
 ## Action: `lvgl_kawaii_face.set_emotion`
 
