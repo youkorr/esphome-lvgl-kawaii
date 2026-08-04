@@ -232,7 +232,10 @@ external_components:
   - source:
       type: git
       url: https://github.com/youkorr/lvgl_9.5
-      ref: claude/lvgl-kawaii-face-bugs-j225qm #claude/jolly-lamport-ERZOC #claude/mit-license-face-to-face-p9fc6m  #lvgl-ppa-msync-fix #6dc5b02f3e6940e782d12fd6748154c0c384272d #claude/fix-lottie-esp32-crash-K7tM1 #claude/fix-lottie-esp32-crashes-8gqrJ #claude/fix-lottie-esp32-crash-vVG5Y #claude/investigate-pr-conflicts-jyqoy #claude/add-lvgl-example-GJsCN #claude/create-sphere-BVofQ # claude/home-assistant-integration-6apll
+      # lvgl_9.5 n'a besoin d'aucune modification pour le visage kawaii : on
+      # reste sur la branche existante. (Il n'y a PAS de branche
+      # claude/lvgl-kawaii-face-bugs-j225qm sur ce dépôt-là.)
+      ref: claude/jolly-lamport-ERZOC #claude/mit-license-face-to-face-p9fc6m  #lvgl-ppa-msync-fix #6dc5b02f3e6940e782d12fd6748154c0c384272d #claude/fix-lottie-esp32-crash-K7tM1 #claude/fix-lottie-esp32-crashes-8gqrJ #claude/fix-lottie-esp32-crash-vVG5Y #claude/investigate-pr-conflicts-jyqoy #claude/add-lvgl-example-GJsCN #claude/create-sphere-BVofQ # claude/home-assistant-integration-6apll
     components: [lvgl, image, font]
     refresh: 0s
 
