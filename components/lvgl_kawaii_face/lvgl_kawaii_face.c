@@ -159,6 +159,46 @@ typedef struct
 static face_state_t face_state = {0};
 
 static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left);
+/* LVGL has no curve primitive, so stroke a quadratic bezier as a polyline —
+ * the shape the demo GIF draws with PIL (docs/make_demo_gif.py: draw_mouth).
+ * depth > 0 dips the middle down (a smile), depth < 0 lifts it (a frown).
+ * The filled rounded rect this replaces could not express either: every
+ * expression got the same flat slab, only shifted vertically. */
+static void draw_mouth_curve(lv_layer_t *layer, int16_t cx, int16_t cy,
+                             int16_t half_w, int16_t depth, int16_t thickness)
+{
+    if (thickness < 2)
+        thickness = 2;
+
+    lv_draw_line_dsc_t dsc;
+    lv_draw_line_dsc_init(&dsc);
+    dsc.color = lv_color_make(210, 70, 95);   /* GIF: MOUTH */
+    dsc.width = thickness;
+    dsc.opa = LV_OPA_COVER;
+    dsc.round_start = 1;
+    dsc.round_end = 1;
+
+    const float x0 = cx - half_w, y0 = cy - depth * 0.4f;
+    const float x1 = cx,          y1 = cy + depth;
+    const float x2 = cx + half_w, y2 = cy + depth * 0.4f;
+
+    float px = x0, py = y0;
+    for (int i = 1; i <= 16; i++)
+    {
+        float t = (float) i / 16.0f;
+        float mt = 1.0f - t;
+        float x = mt * mt * x0 + 2.0f * mt * t * x1 + t * t * x2;
+        float y = mt * mt * y0 + 2.0f * mt * t * y1 + t * t * y2;
+        dsc.p1.x = (int32_t) px;
+        dsc.p1.y = (int32_t) py;
+        dsc.p2.x = (int32_t) x;
+        dsc.p2.y = (int32_t) y;
+        lv_draw_line(layer, &dsc);
+        px = x;
+        py = y;
+    }
+}
+
 static void draw_mouth(lv_obj_t *canvas, int8_t curve);
 static void update_emotion_parameters(face_emotion_t emotion, uint8_t *left_eye, uint8_t *right_eye, int8_t *mouth,
                                       int8_t *left_brow, int8_t *right_brow, int8_t *brow_height);
@@ -738,18 +778,34 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
     else
     {
 
-        /* Closed / almost-closed eye. Drawn in the palette colour: in black it
-         * vanished on a dark panel, so blinking made the eyes disappear. */
-        line_dsc.color = face_state.line_color;
-        line_dsc.width = face_state.line_width;
+        /* Closed / almost-closed eye. The GIF arcs it upward (d.arc 200..340
+         * in EYE white) — the cute shut eye; a straight line read as a dash,
+         * and in black it vanished outright on a dark panel. */
+        line_dsc.color = lv_color_white();
+        line_dsc.width = face_state.line_width + fs(2);
         line_dsc.opa = LV_OPA_COVER;
         line_dsc.round_start = 1;
         line_dsc.round_end = 1;
 
-        line_dsc.p1.x = center_x - eye_width / 2;
-        line_dsc.p1.y = center_y;
-        line_dsc.p2.x = center_x + eye_width / 2;
-        line_dsc.p2.y = center_y;
+        {
+            const float rx = eye_width / 2.0f;
+            const float ry = eye_width * 0.30f;
+            float prev_x = center_x + rx * cosf(200.0f * 3.14159f / 180.0f);
+            float prev_y = center_y + ry * sinf(200.0f * 3.14159f / 180.0f);
+            for (int i = 1; i <= 12; i++)
+            {
+                float a = (200.0f + (140.0f * i) / 12.0f) * 3.14159f / 180.0f;
+                float x = center_x + rx * cosf(a);
+                float y = center_y + ry * sinf(a);
+                line_dsc.p1.x = (int32_t) prev_x;
+                line_dsc.p1.y = (int32_t) prev_y;
+                line_dsc.p2.x = (int32_t) x;
+                line_dsc.p2.y = (int32_t) y;
+                lv_draw_line(&layer, &line_dsc);
+                prev_x = x;
+                prev_y = y;
+            }
+        }
         lv_draw_line(&layer, &line_dsc);
 
         line_dsc.width = 2;
@@ -1005,20 +1061,9 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         int16_t mouth_h = height * 0.5;
         int16_t adjusted_y = center_y + (curve_offset / 2);
 
-        rect_dsc.bg_color = lv_color_make(220, 60, 80);
-        rect_dsc.bg_opa = LV_OPA_90;
-        rect_dsc.border_color = lv_color_black();
-        rect_dsc.border_width = fs(3);
-        rect_dsc.border_opa = LV_OPA_COVER;
-        rect_dsc.radius = fs(12);
-
-        lv_area_t mouth_area;
-        mouth_area.x1 = center_x - mouth_width / 2;
-        mouth_area.y1 = adjusted_y - mouth_h / 2;
-        mouth_area.x2 = center_x + mouth_width / 2;
-        mouth_area.y2 = adjusted_y + mouth_h / 2;
-
-        lv_draw_rect(&layer, &rect_dsc, &mouth_area);
+        draw_mouth_curve(&layer, center_x, adjusted_y, mouth_width / 2,
+                         (int16_t)((height * 0.367f * curve) / 100),
+                         (int16_t)(height * 0.11f));
 
         if (curve > 100)
         {
@@ -1160,20 +1205,9 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         int16_t mouth_h = height * 0.35;
         int16_t adjusted_y = center_y + (curve_offset / 2);
 
-        rect_dsc.bg_color = lv_color_make(180, 50, 70);
-        rect_dsc.bg_opa = LV_OPA_90;
-        rect_dsc.border_color = lv_color_black();
-        rect_dsc.border_width = fs(3);
-        rect_dsc.border_opa = LV_OPA_COVER;
-        rect_dsc.radius = fs(8);
-
-        lv_area_t mouth_area;
-        mouth_area.x1 = center_x - mouth_width / 2;
-        mouth_area.y1 = adjusted_y;
-        mouth_area.x2 = center_x + mouth_width / 2;
-        mouth_area.y2 = adjusted_y + mouth_h;
-
-        lv_draw_rect(&layer, &rect_dsc, &mouth_area);
+        draw_mouth_curve(&layer, center_x, adjusted_y, mouth_width / 2,
+                         (int16_t)((height * 0.367f * curve) / 100),
+                         (int16_t)(height * 0.11f));
 
         if (curve < -50)
         {
@@ -1243,18 +1277,9 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
             rect_dsc.bg_opa = LV_OPA_90;
         }
 
-        rect_dsc.border_color = lv_color_black();
-        rect_dsc.border_width = fs(2);
-        rect_dsc.border_opa = LV_OPA_COVER;
-        rect_dsc.radius = fs(6);
-
-        lv_area_t mouth_area;
-        mouth_area.x1 = center_x - smile_width / 2;
-        mouth_area.y1 = center_y;
-        mouth_area.x2 = center_x + smile_width / 2;
-        mouth_area.y2 = center_y + mouth_h;
-
-        lv_draw_rect(&layer, &rect_dsc, &mouth_area);
+        (void) is_slight_smile;
+        draw_mouth_curve(&layer, center_x, center_y, smile_width / 2,
+                         (int16_t)((height * 0.367f * curve) / 100), mouth_h);
     }
 
     lv_canvas_finish_layer(canvas, &layer);
