@@ -415,7 +415,9 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
     if (eye_height < fs(8))
         eye_height = fs(8);
     int16_t center_x = width / 2;
-    int16_t center_y = (height * 0.6) + face_state.bounce_offset;
+    /* 0.6 left no room under the eye: the blush was drawn past the
+     * bottom edge of the canvas and clipped away entirely. */
+    int16_t center_y = (height * 0.50) + face_state.bounce_offset;
 
     lv_draw_line_dsc_t line_dsc;
     lv_draw_line_dsc_init(&line_dsc);
@@ -455,15 +457,27 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         lv_draw_rect_dsc_t blush_dsc;
         lv_draw_rect_dsc_init(&blush_dsc);
         blush_dsc.bg_color = lv_color_make(255, 150, 180);
-        blush_dsc.bg_opa = (face_state.blush_intensity * LV_OPA_COVER) / 100;
+        /* GIF: alpha = 210 * blush, so it blends to a muted mauve on a dark
+         * background instead of the flat pink full opacity gave. */
+        blush_dsc.bg_opa = (face_state.blush_intensity * LV_OPA_COVER) / 140;
         blush_dsc.radius = fs(8);
         blush_dsc.border_width = 0;
 
+        blush_dsc.radius = LV_RADIUS_CIRCLE;
+
+        /* GIF: an ellipse 0.8 x 0.4 of the eye, one eye-height below it. */
+        int16_t eye_bottom = center_y + eye_width / 2;
+        int16_t blush_cy = eye_bottom + (height - eye_bottom) / 2;
+        int16_t blush_hw = eye_width * 0.40f;
+        int16_t blush_hh = eye_width * 0.11f;
+        if (blush_cy + blush_hh > height - 1)
+            blush_cy = height - 1 - blush_hh;
+
         lv_area_t blush_area;
-        blush_area.x1 = center_x - fs(10);
-        blush_area.y1 = center_y + eye_width / 2 + fs(2);
-        blush_area.x2 = center_x + fs(10);
-        blush_area.y2 = center_y + eye_width / 2 + fs(8);
+        blush_area.x1 = center_x - blush_hw;
+        blush_area.y1 = blush_cy - blush_hh;
+        blush_area.x2 = center_x + blush_hw;
+        blush_area.y2 = blush_cy + blush_hh;
 
         lv_draw_rect(&layer, &blush_dsc, &blush_area);
     }
@@ -864,6 +878,8 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
     lv_canvas_init_layer(canvas, &layer);
 
     int16_t center_x = width / 2;
+    /* GIF: half-width RW*0.11 of the frame, which is 0.38 of the face at
+     * the frame/face ratio the demo uses — i.e. the original value. */
     int16_t mouth_width = width * 0.85;
 
     int16_t curve_offset = (height * curve) / 140;
@@ -1047,7 +1063,10 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
     else if (curve > 35 && curve < 65)
     {
 
-        float diamond_factor = face_state.diamond_mouth_phase / 100.0;
+        /* The GIF's open mouth is a round O; the diamond built from four
+         * rects read as a red cross on screen. Keep the oval only. */
+        float diamond_factor = 0.0f;
+        (void) face_state.diamond_mouth_phase;
 
         if (diamond_factor > 0.3)
         {
@@ -1097,15 +1116,15 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         else
         {
 
-            int16_t mouth_width_oval = mouth_width / 3.5;
-            int16_t mouth_height_oval = mouth_width / 4;
+            /* GIF: ellipse of RW*0.16 x RH*0.15 of the frame. */
+            int16_t mouth_width_oval = mouth_width / 2.6;
+            int16_t mouth_height_oval = mouth_width / 2.9;
 
-            rect_dsc.bg_color = lv_color_make(200, 70, 90);
-            rect_dsc.bg_opa = LV_OPA_90;
-            rect_dsc.border_color = lv_color_black();
-            rect_dsc.border_width = fs(3);
-            rect_dsc.border_opa = LV_OPA_COVER;
-            rect_dsc.radius = fs(8);
+            rect_dsc.bg_color = lv_color_make(150, 40, 60);
+            rect_dsc.bg_opa = LV_OPA_COVER;
+            rect_dsc.border_width = 0;
+            /* A true round O, as the GIF draws it. */
+            rect_dsc.radius = LV_RADIUS_CIRCLE;
 
             lv_area_t mouth_area;
             mouth_area.x1 = center_x - mouth_width_oval;
@@ -1204,8 +1223,10 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
 
     else
     {
-        int16_t mouth_h = height * 0.28;
-        int16_t smile_width = mouth_width * 0.65;
+        /* GIF strokes the mouth (width 7px on a 300 frame) instead of
+         * filling a slab; height * 0.28 read as a fat lozenge. */
+        int16_t mouth_h = height * 0.11;
+        int16_t smile_width = mouth_width * 0.92;
 
         bool is_slight_smile = (curve > 5);
 
