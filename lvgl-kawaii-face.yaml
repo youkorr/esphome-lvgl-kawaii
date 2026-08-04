@@ -489,14 +489,62 @@ voice_assistant:
   on_client_disconnected:
     - micro_wake_word.stop:
 
+globals:
+  # Index courant dans la liste des 17 expressions (démo).
+  - id: demo_emotion_idx
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: demo_emotion_name
+    type: std::string
+    restore_value: false
+
 switch:
 
 
   - platform: gpio
-    pin: GPIO53 
+    pin: GPIO53
     name: "Audio Amplifier"
     id: audio_amplifier
-    restore_mode: ALWAYS_OFF 
+    restore_mode: ALWAYS_OFF
+
+  # Fait défiler les 17 expressions, comme examples/basic_cycle du dépôt
+  # d'origine. Sert à juger le rendu sans déclencher l'assistant vocal.
+  # Coupe-le pour laisser le voice assistant piloter le visage.
+  - platform: template
+    name: "Démo expressions du visage"
+    id: face_demo
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    turn_off_action:
+      - lvgl.label.update:
+          id: face_caption
+          text: ""
+
+interval:
+  # 2500 ms = HOLD_MS de l'exemple upstream.
+  - interval: 2500ms
+    then:
+      - if:
+          condition:
+            switch.is_on: face_demo
+          then:
+            - lambda: |-
+                // Même ordre que ALL_EMOTIONS[] dans examples/basic_cycle/main/main.c
+                static const char *const EMOTIONS[] = {
+                    "neutral", "happy", "worried", "wink", "love", "surprised",
+                    "playful", "silly", "smirk", "working_hard", "excited",
+                    "confused", "cool", "sleepy", "sad", "cry", "angry"};
+                const int count = sizeof(EMOTIONS) / sizeof(EMOTIONS[0]);
+                int i = id(demo_emotion_idx);
+                id(demo_emotion_name) = EMOTIONS[i];
+                id(demo_emotion_idx) = (i + 1) % count;
+            - lvgl_kawaii_face.set_emotion:
+                id: face
+                emotion: !lambda return id(demo_emotion_name);
+            - lvgl.label.update:
+                id: face_caption
+                text: !lambda return id(demo_emotion_name);
 
 
 touchscreen:
@@ -605,11 +653,16 @@ lvgl:
     - id: page_face
       bg_color: ${background_color}
       widgets:
-        # Le conteneur du visage. Sa taille définit celle du visage :
-        # celui-ci fait min(width, height) et se centre dedans.
+        # Le conteneur du visage. Reprend à l'identique le panneau de
+        # l'exemple upstream (0015/lvgl_kawaii_face, examples/basic_cycle) :
+        #   set_size / center / bg_opa TRANSP / border_width 0 / pad_all 0
+        #   / clear_flag(SCROLLABLE)
+        # scrollable: false est indispensable — les canvas des yeux débordent
+        # un peu du conteneur, donc sans ça un glissement du doigt sur le
+        # visage le ferait défiler.
+        #
         # ---> C'EST ICI QU'ON RÈGLE LA TAILLE DU VISAGE. <---
-        # 340 correspond à peu près au GIF de démo (300 px). Monte à 420/520
-        # pour un visage qui remplit l'écran de 1024x600.
+        # Les proportions suivent la taille (référence upstream : 135).
         #
         # Fond transparent : le noir de la page traverse, et le composant
         # reprend cette couleur pour les canvas des yeux/bouche. Le visage se
@@ -619,16 +672,27 @@ lvgl:
             width: 340
             height: 340
             align: CENTER
-            y: -20
+            y: -40
             bg_opa: TRANSP
             border_width: 0
             pad_all: 0
+            scrollable: false
+
+        # Légende de l'émotion, comme dans le GIF de démo.
+        - label:
+            id: face_caption
+            text: ""
+            text_color: ${text_color_secondary}
+            text_font: montserrat_22
+            align: CENTER
+            y: 160
 
         - button:
             id: btn_back_home
             width: 200
             height: 70
-            align: BOTTOM_MID
+            align: BOTTOM_LEFT
+            x: 40
             y: -20
             bg_color: 0x30363D
             radius: 35
@@ -643,6 +707,26 @@ lvgl:
                   id: page_home
                   animation: MOVE_RIGHT
                   time: 250ms
+
+        # Fait défiler les 17 expressions pour juger le rendu.
+        - button:
+            id: btn_demo
+            width: 260
+            height: 70
+            align: BOTTOM_RIGHT
+            x: -40
+            y: -20
+            checkable: true
+            bg_color: 0x30363D
+            radius: 35
+            widgets:
+              - label:
+                  text: "Démo expressions"
+                  text_color: 0xFFFFFF
+                  text_font: montserrat_22
+                  align: CENTER
+            on_click:
+              - switch.toggle: face_demo
 
 # =============================================================================
 # LE VISAGE KAWAII
