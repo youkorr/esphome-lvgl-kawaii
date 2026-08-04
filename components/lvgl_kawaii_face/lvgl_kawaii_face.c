@@ -450,14 +450,17 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
     lv_layer_t layer;
     lv_canvas_init_layer(canvas, &layer);
 
-    int16_t eye_width = width * 0.75;
+    /* GIF: the eye white is 17% of the frame; 0.75 put it at 20.6%.
+     * Smaller also frees the room the cheeks need underneath. */
+    int16_t eye_width = width * 0.68;
     int16_t eye_height = (eye_width * openness) / 100;
     if (eye_height < fs(8))
         eye_height = fs(8);
     int16_t center_x = width / 2;
-    /* 0.6 left no room under the eye: the blush was drawn past the
-     * bottom edge of the canvas and clipped away entirely. */
-    int16_t center_y = (height * 0.50) + face_state.bounce_offset;
+    /* 0.6 left no room under the eye: the blush was drawn past the bottom
+     * edge of the canvas and clipped away entirely. 0.44 leaves enough for
+     * a rounded cheek instead of the flat bar 0.50 still gave. */
+    int16_t center_y = (height * 0.44f) + face_state.bounce_offset;
 
     lv_draw_line_dsc_t line_dsc;
     lv_draw_line_dsc_init(&line_dsc);
@@ -505,11 +508,17 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
 
         blush_dsc.radius = LV_RADIUS_CIRCLE;
 
-        /* GIF: an ellipse 0.8 x 0.4 of the eye, one eye-height below it. */
+        /* GIF: an ellipse 0.8 x 0.4 of the eye, sitting one eye-height below
+         * it. The eye canvas is square and the eye fills most of it, so the
+         * cheek gets whatever height is left under the eye — rounder than the
+         * clipped bar it was, still flatter than the GIF's. */
         int16_t eye_bottom = center_y + eye_width / 2;
-        int16_t blush_cy = eye_bottom + (height - eye_bottom) / 2;
-        int16_t blush_hw = eye_width * 0.40f;
-        int16_t blush_hh = eye_width * 0.11f;
+        int16_t room = height - eye_bottom;
+        int16_t blush_hh = (room - fs(3)) / 2;
+        if (blush_hh < fs(3))
+            blush_hh = fs(3);
+        int16_t blush_hw = eye_width * 0.36f;
+        int16_t blush_cy = eye_bottom + fs(2) + blush_hh;
         if (blush_cy + blush_hh > height - 1)
             blush_cy = height - 1 - blush_hh;
 
