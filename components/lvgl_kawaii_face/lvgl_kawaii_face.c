@@ -598,7 +598,8 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         rect_dsc.border_color = lv_color_black();
         rect_dsc.border_width = face_state.eye_border_width;
         rect_dsc.border_opa = LV_OPA_COVER;
-        rect_dsc.radius = fs(15);
+        /* Round, as in the demo GIF; upstream's fixed 15px read as a squircle. */
+        rect_dsc.radius = LV_RADIUS_CIRCLE;
 
         lv_area_t eye_area;
         eye_area.x1 = center_x - eye_width / 2;
@@ -638,7 +639,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
             rect_dsc.bg_color = lv_color_make(50, 180, 255);
             rect_dsc.border_width = fs(2);
             rect_dsc.border_color = lv_color_make(30, 140, 230);
-            rect_dsc.radius = fs(8);
+            rect_dsc.radius = LV_RADIUS_CIRCLE;
 
             lv_area_t iris_area;
             iris_area.x1 = iris_center_x - iris_width / 2;
@@ -652,7 +653,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
             int16_t pupil_height = iris_height * 0.6;
             rect_dsc.bg_color = lv_color_black();
             rect_dsc.border_width = 0;
-            rect_dsc.radius = fs(6);
+            rect_dsc.radius = LV_RADIUS_CIRCLE;
 
             lv_area_t pupil_area;
             pupil_area.x1 = iris_center_x - pupil_width / 2;
@@ -807,7 +808,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         lv_area_t shine_area;
         int16_t shine_w = is_working ? 2 : 1;
         shine_area.x1 = drop_x - shine_w;
-        shine_area.y1 = drop_y - drop_top + 2;
+        shine_area.y1 = drop_y - drop_top + fs(2);
         shine_area.x2 = drop_x;
         shine_area.y2 = drop_y - drop_top + (is_working ? 5 : 4);
         lv_draw_rect(&layer, &sweat_dsc, &shine_area);
@@ -827,10 +828,10 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         int16_t tear_y = center_y + eye_height / 2 + 5 + face_state.tear_fall_offset;
 
         lv_area_t tear_area;
-        tear_area.x1 = tear_x - 3;
-        tear_area.y1 = tear_y - 5;
-        tear_area.x2 = tear_x + 3;
-        tear_area.y2 = tear_y + 5;
+        tear_area.x1 = tear_x - fs(3);
+        tear_area.y1 = tear_y - fs(5);
+        tear_area.x2 = tear_x + fs(3);
+        tear_area.y2 = tear_y + fs(5);
         lv_draw_rect(&layer, &rect_dsc, &tear_area);
 
         line_dsc.color = lv_color_make(150, 200, 255);
@@ -1051,7 +1052,7 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         if (diamond_factor > 0.3)
         {
 
-            int16_t stretch = 3 + (diamond_factor * 8);
+            int16_t stretch = fs(3) + (diamond_factor * fs(8));
 
             rect_dsc.bg_color = lv_color_make(200, 70, 90);
             rect_dsc.bg_opa = LV_OPA_90;
@@ -1061,36 +1062,36 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
             rect_dsc.radius = fs(4);
 
             lv_area_t diamond_area;
-            diamond_area.x1 = center_x - 6;
-            diamond_area.y1 = center_y + curve_offset - stretch - 6;
-            diamond_area.x2 = center_x + 6;
-            diamond_area.y2 = center_y + curve_offset - 2;
+            diamond_area.x1 = center_x - fs(6);
+            diamond_area.y1 = center_y + curve_offset - stretch - fs(6);
+            diamond_area.x2 = center_x + fs(6);
+            diamond_area.y2 = center_y + curve_offset - fs(2);
             lv_draw_rect(&layer, &rect_dsc, &diamond_area);
 
-            diamond_area.x1 = center_x + 2;
-            diamond_area.y1 = center_y + curve_offset - 6;
-            diamond_area.x2 = center_x + stretch + 6;
-            diamond_area.y2 = center_y + curve_offset + 6;
+            diamond_area.x1 = center_x + fs(2);
+            diamond_area.y1 = center_y + curve_offset - fs(6);
+            diamond_area.x2 = center_x + stretch + fs(6);
+            diamond_area.y2 = center_y + curve_offset + fs(6);
             lv_draw_rect(&layer, &rect_dsc, &diamond_area);
 
-            diamond_area.x1 = center_x - 6;
-            diamond_area.y1 = center_y + curve_offset + 2;
-            diamond_area.x2 = center_x + 6;
-            diamond_area.y2 = center_y + curve_offset + stretch + 6;
+            diamond_area.x1 = center_x - fs(6);
+            diamond_area.y1 = center_y + curve_offset + fs(2);
+            diamond_area.x2 = center_x + fs(6);
+            diamond_area.y2 = center_y + curve_offset + stretch + fs(6);
             lv_draw_rect(&layer, &rect_dsc, &diamond_area);
 
-            diamond_area.x1 = center_x - stretch - 6;
-            diamond_area.y1 = center_y + curve_offset - 6;
-            diamond_area.x2 = center_x - 2;
-            diamond_area.y2 = center_y + curve_offset + 6;
+            diamond_area.x1 = center_x - stretch - fs(6);
+            diamond_area.y1 = center_y + curve_offset - fs(6);
+            diamond_area.x2 = center_x - fs(2);
+            diamond_area.y2 = center_y + curve_offset + fs(6);
             lv_draw_rect(&layer, &rect_dsc, &diamond_area);
 
             rect_dsc.border_width = 0;
             rect_dsc.radius = fs(2);
-            diamond_area.x1 = center_x - 4;
-            diamond_area.y1 = center_y + curve_offset - 4;
-            diamond_area.x2 = center_x + 4;
-            diamond_area.y2 = center_y + curve_offset + 4;
+            diamond_area.x1 = center_x - fs(4);
+            diamond_area.y1 = center_y + curve_offset - fs(4);
+            diamond_area.x2 = center_x + fs(4);
+            diamond_area.y2 = center_y + curve_offset + fs(4);
             lv_draw_rect(&layer, &rect_dsc, &diamond_area);
         }
         else
@@ -1168,17 +1169,17 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
             int16_t tear_x_left = center_x - mouth_width / 2 - 10;
 
             lv_area_t tear_area;
-            tear_area.x1 = tear_x_left - 4;
-            tear_area.y1 = tear_y - 4;
-            tear_area.x2 = tear_x_left + 4;
-            tear_area.y2 = tear_y + 4;
+            tear_area.x1 = tear_x_left - fs(4);
+            tear_area.y1 = tear_y - fs(4);
+            tear_area.x2 = tear_x_left + fs(4);
+            tear_area.y2 = tear_y + fs(4);
             lv_draw_rect(&layer, &rect_dsc, &tear_area);
 
             int16_t tear_x_right = center_x + mouth_width / 2 + 10;
-            tear_area.x1 = tear_x_right - 4;
-            tear_area.y1 = tear_y - 4;
-            tear_area.x2 = tear_x_right + 4;
-            tear_area.y2 = tear_y + 4;
+            tear_area.x1 = tear_x_right - fs(4);
+            tear_area.y1 = tear_y - fs(4);
+            tear_area.x2 = tear_x_right + fs(4);
+            tear_area.y2 = tear_y + fs(4);
             lv_draw_rect(&layer, &rect_dsc, &tear_area);
 
             line_dsc.color = lv_color_make(150, 200, 255);
