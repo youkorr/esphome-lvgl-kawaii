@@ -66,6 +66,10 @@ KawaiiFaceSetEmotionAction = kawaii_ns.class_(
 KawaiiFaceSetEmotionFromTextAction = kawaii_ns.class_(
     "KawaiiFaceSetEmotionFromTextAction", automation.Action
 )
+KawaiiFaceSetTalkingAction = kawaii_ns.class_(
+    "KawaiiFaceSetTalkingAction", automation.Action
+)
+KawaiiFaceLookAtAction = kawaii_ns.class_("KawaiiFaceLookAtAction", automation.Action)
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -185,4 +189,59 @@ async def kawaii_set_emotion_from_text_to_code(config, action_id, template_arg, 
     var = cg.new_Pvariable(action_id, template_arg, parent)
     templ = await cg.templatable(config[CONF_TEXT], args, cg.std_string)
     cg.add(var.set_text(templ))
+    return var
+
+
+CONF_TALKING = "talking"
+CONF_X = "x"
+CONF_Y = "y"
+CONF_HOLD = "hold"
+
+SET_TALKING_SCHEMA = cv.maybe_simple_value(
+    {
+        cv.GenerateID(CONF_ID): cv.use_id(KawaiiFaceComponent),
+        cv.Required(CONF_TALKING): cv.templatable(cv.boolean),
+    },
+    key=CONF_TALKING,
+)
+
+# x/y are -100..100, (0, 0) straight ahead. Templatable, so the values can come
+# from a face detector, a touchscreen, or anything else.
+LOOK_AT_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(CONF_ID): cv.use_id(KawaiiFaceComponent),
+        cv.Required(CONF_X): cv.templatable(cv.int_range(min=-100, max=100)),
+        cv.Required(CONF_Y): cv.templatable(cv.int_range(min=-100, max=100)),
+        cv.Optional(CONF_HOLD, default="2s"): cv.positive_time_period_milliseconds,
+    }
+)
+
+
+@automation.register_action(
+    "lvgl_kawaii_face.set_talking",
+    KawaiiFaceSetTalkingAction,
+    SET_TALKING_SCHEMA,
+    synchronous=True,
+)
+async def kawaii_set_talking_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent)
+    templ = await cg.templatable(config[CONF_TALKING], args, cg.bool_)
+    cg.add(var.set_talking(templ))
+    return var
+
+
+@automation.register_action(
+    "lvgl_kawaii_face.look_at",
+    KawaiiFaceLookAtAction,
+    LOOK_AT_SCHEMA,
+    synchronous=True,
+)
+async def kawaii_look_at_to_code(config, action_id, template_arg, args):
+    parent = await cg.get_variable(config[CONF_ID])
+    var = cg.new_Pvariable(action_id, template_arg, parent)
+    for key in (CONF_X, CONF_Y):
+        templ = await cg.templatable(config[key], args, cg.int_)
+        cg.add(getattr(var, f"set_{key}")(templ))
+    cg.add(var.set_hold(config[CONF_HOLD].total_milliseconds))
     return var

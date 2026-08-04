@@ -204,6 +204,33 @@ void face_set_position(int16_t x, int16_t y);
 lv_obj_t *face_get_container(void);
 
 /**
+ * @brief Animate the mouth as if speaking
+ *
+ * While enabled the mouth opens and closes on its own, overriding whatever
+ * shape the current emotion would draw. The expression itself (eyes, brows,
+ * blush) keeps running, so the face stays "happy while talking".
+ *
+ * Drive it from the voice assistant: on_tts_start -> true, on_tts_end -> false.
+ *
+ * @param talking true to animate the mouth, false to restore the expression
+ */
+void face_set_talking(bool talking);
+
+/**
+ * @brief Point the eyes somewhere
+ *
+ * Overrides the idle pupil drift so the face looks in a direction, e.g. at
+ * wherever the screen was last touched. Both axes are -100..100, with (0,0)
+ * looking straight ahead. The gaze holds for hold_ms, then the eyes go back
+ * to their own wandering.
+ *
+ * @param dx      horizontal direction, -100 (left) .. 100 (right)
+ * @param dy      vertical direction, -100 (up) .. 100 (down)
+ * @param hold_ms how long to hold it, in ms (0 = until the next call)
+ */
+void face_set_gaze(int8_t dx, int8_t dy, uint32_t hold_ms);
+
+/**
  * @brief Clean up face animation resources
  */
 void face_animation_deinit(void);

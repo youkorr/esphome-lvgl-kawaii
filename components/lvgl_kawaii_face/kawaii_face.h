@@ -184,6 +184,28 @@ class KawaiiFaceComponent : public Component {
 #endif
   }
 
+  // Animate the mouth as if speaking. Drive from the voice assistant:
+  // on_tts_start -> true, on_tts_end -> false.
+  void set_talking(bool talking) {
+#ifdef USE_LVGL
+    if (!this->initialized_)
+      return;
+    face_set_talking(talking);
+#endif
+  }
+
+  // Point the eyes somewhere, -100..100 on each axis, (0,0) straight ahead.
+  // Fed from a face detector, this makes the face follow whoever is in front
+  // of the camera; the gaze releases itself after hold_ms so the eyes go back
+  // to wandering when the person leaves.
+  void look_at(int x, int y, uint32_t hold_ms) {
+#ifdef USE_LVGL
+    if (!this->initialized_)
+      return;
+    face_set_gaze((int8_t) clamp(x, -100, 100), (int8_t) clamp(y, -100, 100), hold_ms);
+#endif
+  }
+
   // Pick an emotion from the content of a response (e.g. the voice-assistant
   // TTS text in on_tts_start). Matches the configured keyword rules, falling
   // back to `response_fallback_` when nothing matches. This is how the face
@@ -342,6 +364,38 @@ template<typename... Ts> class KawaiiFaceSetEmotionAction : public Action<Ts...>
 
  protected:
   KawaiiFaceComponent *parent_;
+};
+
+// --- Action: set_talking ---
+template<typename... Ts> class KawaiiFaceSetTalkingAction : public Action<Ts...> {
+ public:
+  KawaiiFaceSetTalkingAction(KawaiiFaceComponent *parent) : parent_(parent) {}
+
+  TEMPLATABLE_VALUE(bool, talking)
+
+  void play(const Ts &...x) override { this->parent_->set_talking(this->talking_.value(x...)); }
+
+ protected:
+  KawaiiFaceComponent *parent_;
+};
+
+// --- Action: look_at (follow a face, a touch, anything) ---
+template<typename... Ts> class KawaiiFaceLookAtAction : public Action<Ts...> {
+ public:
+  KawaiiFaceLookAtAction(KawaiiFaceComponent *parent) : parent_(parent) {}
+
+  TEMPLATABLE_VALUE(int, x)
+  TEMPLATABLE_VALUE(int, y)
+
+  void set_hold(uint32_t hold_ms) { this->hold_ms_ = hold_ms; }
+
+  void play(const Ts &...args) override {
+    this->parent_->look_at(this->x_.value(args...), this->y_.value(args...), this->hold_ms_);
+  }
+
+ protected:
+  KawaiiFaceComponent *parent_;
+  uint32_t hold_ms_{2000};
 };
 
 // --- Action: set_emotion_from_text (react to the response content) ---

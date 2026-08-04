@@ -140,6 +140,39 @@ one, with no configuration.
 Voice-assistant friendly aliases: `idle`→neutral, `listening`→surprised,
 `thinking`→working_hard, `speaking`/`talking`→happy, `error`→sad.
 
+## Action: `lvgl_kawaii_face.set_talking`
+
+Animates the mouth as if speaking, overriding whatever shape the current
+expression draws — the eyes, brows and cheeks carry on, so the face stays
+"happy while talking". Wire it to the assistant's speech:
+
+```yaml
+voice_assistant:
+  on_tts_start:
+    - lvgl_kawaii_face.set_talking: true
+  on_tts_end:
+    - lvgl_kawaii_face.set_talking: false
+```
+
+## Action: `lvgl_kawaii_face.look_at`
+
+Points the eyes somewhere: `x` and `y` run -100..100, `(0, 0)` straight ahead.
+The gaze releases itself after `hold`, so the eyes go back to their own
+wandering when whatever they were following goes away.
+
+```yaml
+- lvgl_kawaii_face.look_at:
+    id: face
+    x: !lambda return -60;   # templatable
+    y: 0
+    hold: 2s
+```
+
+Both values are templatable, so the gaze can be driven by anything — a
+touchscreen, a presence sensor, or a camera. See
+[`example_face_follow_camera.yaml`](example_face_follow_camera.yaml) for the
+face following a person detected by an ESP32-P4 camera.
+
 ## Action: `lvgl_kawaii_face.set_emotion_from_text`
 
 Makes the face **follow the content of the assistant's (LLM) response**: it

@@ -1,0 +1,126 @@
+# =============================================================================
+# Le visage SUIT LA PERSONNE — caméra ESP32-P4 + détection de visage
+# =============================================================================
+#
+# Le regard du visage kawaii se pose sur la personne détectée par la caméra et
+# la suit quand elle se déplace. Quand plus personne n'est là, les yeux
+# reprennent leur vagabondage tout seuls (le maintien expire).
+#
+# Rien de tout ceci n'est compilé dans lvgl_kawaii_face : le lien se fait
+# uniquement par un lambda YAML. Le composant kawaii ne connaît donc pas tes
+# dépôts caméra, et il compile sans eux.
+#
+# Dépôts nécessaires (les tiens) :
+#   - youkorr/esphome_esp-video   -> capture (esp_video, esp_cam_sensor)
+#   - youkorr/face_detection      -> esp-dl + human_face_detect + face_detection
+# =============================================================================
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/youkorr/esphome-lvgl-kawaii
+      ref: claude/lvgl-kawaii-face-bugs-j225qm
+    components: [lvgl_kawaii_face]
+    refresh: 0s
+
+  - source:
+      type: git
+      url: https://github.com/youkorr/esphome_esp-video
+      ref: claude/usb-uvc-consumer-integration-gnbflf
+    components: [esp_video, esp_cam_sensor, esp_ipa, esp_sccb_intf]
+    refresh: 0s
+
+  - source:
+      type: git
+      url: https://github.com/youkorr/face_detection
+      ref: claude/esphome-face-detection-mit-71f1lr
+    components: [face_detection]
+    refresh: 0s
+
+# --- Caméra + détection (adapte à ta carte) ---------------------------------
+# esp_cam_sensor:
+#   - platform: mipi_csi
+#     id: cam
+#     ...
+#
+# face_detection:
+#   id: face_detect
+#   camera_id: cam
+#   score_threshold: 0.5
+#   detection_interval: 3      # 1 image sur 3 : suffisant pour suivre, et
+#                              # ça laisse du CPU au reste (le P4 n'a pas de NPU)
+#   draw_enabled: false        # pas besoin d'afficher les boîtes
+
+globals:
+  # Dernière fois qu'un visage a été vu, pour savoir quand lâcher le regard.
+  - id: last_face_seen
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+
+interval:
+  # 10 Hz : assez fluide pour que le suivi paraisse vivant, assez lent pour
+  # ne rien coûter. La détection tourne à son propre rythme de son côté.
+  - interval: 100ms
+    then:
+      - lambda: |-
+          auto faces = id(face_detect).get_detected_faces();
+          if (faces.empty())
+            return;
+
+          // Le visage le plus grand = la personne la plus proche. C'est elle
+          // qu'on regarde, plutôt que de loucher entre deux personnes.
+          const auto *best = &faces[0];
+          int best_area = 0;
+          for (auto &f : faces) {
+            int area = (f.x2 - f.x1) * (f.y2 - f.y1);
+            if (area > best_area) { best_area = area; best = &f; }
+          }
+
+          // Coordonnées image -> -100..100 attendus par look_at.
+          int iw = id(cam).get_image_width();
+          int ih = id(cam).get_image_height();
+          if (iw <= 0 || ih <= 0)
+            return;
+
+          int cx = (best->x1 + best->x2) / 2;
+          int cy = (best->y1 + best->y2) / 2;
+          int gx = (cx * 200) / iw - 100;
+          int gy = (cy * 200) / ih - 100;
+
+          // La caméra te fait face : ce qu'elle voit à sa droite est à ta
+          // gauche. On inverse X pour que le visage te regarde VRAIMENT.
+          gx = -gx;
+
+          // Lissage : sans ça les yeux sautent à chaque détection bruitée.
+          static int sx = 0, sy = 0;
+          sx = (sx * 2 + gx) / 3;
+          sy = (sy * 2 + gy) / 3;
+
+          id(last_face_seen) = millis();
+          id(face).look_at(sx, sy / 2, 1500);   // Y atténué : moins de roulis
+
+  # Personne depuis 8 s -> le visage s'ennuie et détourne les yeux.
+  - interval: 2s
+    then:
+      - if:
+          condition:
+            - lambda: 'return id(last_face_seen) != 0 && (millis() - id(last_face_seen)) > 8000;'
+          then:
+            - lvgl_kawaii_face.set_emotion: { id: face, emotion: sleepy }
+            - lambda: id(last_face_seen) = 0;
+
+# --- Réactions à la détection -----------------------------------------------
+# Le composant face_detection expose aussi la reconnaissance : le visage peut
+# saluer les gens qu'il connaît et se méfier des inconnus.
+#
+# text_sensor:
+#   - platform: template
+#     id: known_person
+#     lambda: 'return id(face_detect).get_last_recognized_name();'
+#     update_interval: 1s
+#     on_value:
+#       then:
+#         - lvgl_kawaii_face.set_emotion:
+#             id: face
+#             emotion: !lambda 'return x.empty() ? "confused" : "love";'

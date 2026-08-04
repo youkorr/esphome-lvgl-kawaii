@@ -139,6 +139,16 @@ typedef struct
     uint16_t mouth_cw;
     uint16_t mouth_ch;
 
+    /* Speaking animation: overrides the mouth while the assistant talks. */
+    bool talking;
+    uint8_t talk_phase;
+
+    /* Directed gaze, overriding the idle pupil drift until gaze_until. */
+    bool gaze_active;
+    int8_t gaze_x;
+    int8_t gaze_y;
+    uint32_t gaze_until;
+
     lv_color_t bg_color;
     /* Strokes that would otherwise be drawn in near-black: the eyebrows and
      * the closed-eye line. Picked from the background so the face reads on a
@@ -974,6 +984,40 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
     lv_draw_line_dsc_t line_dsc;
     lv_draw_line_dsc_init(&line_dsc);
 
+    /* Speaking. Two sines of different periods keep it from looking like a
+     * metronome; the expression's eyes, brows and cheeks carry on underneath.
+     * Drawn before the cheeks so those stay on top, and returns early so the
+     * emotion's own mouth is skipped entirely. */
+    if (face_state.talking)
+    {
+        float p = face_state.talk_phase * 0.2f;
+        float open = 0.45f + 0.35f * sinf(p) + 0.20f * sinf(p * 2.7f);
+        if (open < 0.10f)
+            open = 0.10f;
+        if (open > 1.0f)
+            open = 1.0f;
+
+        lv_draw_rect_dsc_t talk_dsc;
+        lv_draw_rect_dsc_init(&talk_dsc);
+        talk_dsc.bg_color = lv_color_make(150, 40, 60);
+        talk_dsc.bg_opa = LV_OPA_COVER;
+        talk_dsc.border_width = 0;
+        talk_dsc.radius = LV_RADIUS_CIRCLE;
+
+        int16_t talk_hw = (int16_t)(mouth_width * 0.22f);
+        int16_t talk_hh = (int16_t)(mouth_width * 0.05f + mouth_width * 0.17f * open);
+
+        lv_area_t talk_area;
+        talk_area.x1 = center_x - talk_hw;
+        talk_area.y1 = center_y - talk_hh;
+        talk_area.x2 = center_x + talk_hw;
+        talk_area.y2 = center_y + talk_hh;
+        lv_draw_rect(&layer, &talk_dsc, &talk_area);
+
+        lv_canvas_finish_layer(canvas, &layer);
+        return;
+    }
+
     /* Cheeks. The GIF blushes happy, love and wink only, and places the
      * patches either side of the mouth. They used to be drawn in the eye
      * canvas, which had room for nothing but a flat clipped sliver under the
@@ -1598,6 +1642,17 @@ static void animation_timer_cb(lv_timer_t *timer)
     bounce_counter++;
     pupil_counter++;
 
+    if (face_state.talking)
+    {
+        face_state.talk_phase++;
+        needs_redraw = true;
+    }
+
+    /* A held gaze expires on its own so the eyes go back to wandering. */
+    if (face_state.gaze_active && face_state.gaze_until != 0 &&
+        (int32_t)(current_time - face_state.gaze_until) >= 0)
+        face_state.gaze_active = false;
+
     switch (face_state.current_emotion)
     {
     case FACE_HAPPY:
@@ -2127,6 +2182,17 @@ static void animation_timer_cb(lv_timer_t *timer)
         break;
     }
 
+    /* Applied after the per-emotion drift above, so it wins. */
+    if (face_state.gaze_active)
+    {
+        int8_t gx = (int8_t)((face_state.gaze_x * 9) / 100);
+        int8_t gy = (int8_t)((face_state.gaze_y * 6) / 100);
+        if (face_state.pupil_offset_x != gx || face_state.pupil_offset_y != gy)
+            needs_redraw = true;
+        face_state.pupil_offset_x = gx;
+        face_state.pupil_offset_y = gy;
+    }
+
     if (face_state.current_emotion == FACE_NEUTRAL ||
         face_state.current_emotion == FACE_ANGRY ||
         face_state.current_emotion == FACE_SAD ||
@@ -2290,6 +2356,40 @@ void face_set_position(int16_t x, int16_t y)
 lv_obj_t *face_get_container(void)
 {
     return face_state.initialized ? face_state.face_container : NULL;
+}
+
+void face_set_talking(bool talking)
+{
+    if (!face_state.initialized)
+        return;
+
+    face_state.talking = talking;
+    if (!talking)
+        face_state.talk_phase = 0;
+
+    face_lock();
+    draw_mouth(face_state.mouth_canvas, face_state.mouth_curve);
+    face_unlock();
+}
+
+void face_set_gaze(int8_t dx, int8_t dy, uint32_t hold_ms)
+{
+    if (!face_state.initialized)
+        return;
+
+    if (dx > 100)
+        dx = 100;
+    if (dx < -100)
+        dx = -100;
+    if (dy > 100)
+        dy = 100;
+    if (dy < -100)
+        dy = -100;
+
+    face_state.gaze_x = dx;
+    face_state.gaze_y = dy;
+    face_state.gaze_active = true;
+    face_state.gaze_until = hold_ms ? (lv_tick_get() + hold_ms) : 0;
 }
 
 void face_animation_deinit(void)
