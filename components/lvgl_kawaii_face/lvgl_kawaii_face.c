@@ -178,6 +178,21 @@ static lv_color_t face_resolve_bg_color(lv_obj_t *parent)
     return lv_color_white();
 }
 
+/* The pixel constants in draw_eye()/draw_mouth() — corner radii, border
+ * widths, blush size, sparkle size — are tuned for the upstream reference
+ * panel of 135x135 (see the project README's lv_obj_set_size(face_panel,
+ * 135, 135)). They are absolute, so on a larger panel the eyes turned into
+ * near-square boxes with hairline outlines instead of scaling up. fs()
+ * rescales them; it is the identity at the reference size. */
+#define FACE_REF_SZ 135
+static inline int16_t fs(int v)
+{
+    int32_t r = ((int32_t) v * (int32_t) face_state.face_sz) / FACE_REF_SZ;
+    if (v > 0 && r < 1)
+        r = 1;
+    return (int16_t) r;
+}
+
 /* Rec. 601 luma — cheap, and enough to decide which palette reads better. */
 static bool face_bg_is_dark(lv_color_t c)
 {
@@ -267,6 +282,9 @@ esp_err_t face_animation_init(face_config_t *config)
                               ? face_state.config.bg_color
                               : face_resolve_bg_color(parent_obj);
 
+    /* Must precede any fs() call — it scales against this. */
+    face_state.face_sz = face_sz;
+
     if (face_bg_is_dark(face_state.bg_color))
     {
         /* Values from the demo GIF's dark mock-up (docs/make_demo_gif.py). */
@@ -276,14 +294,10 @@ esp_err_t face_animation_init(face_config_t *config)
     else
     {
         face_state.line_color = lv_color_make(80, 60, 40);
-        face_state.eye_border_width = 3;
+        face_state.eye_border_width = (uint8_t) fs(3);
     }
-    /* Fixed at 4px the brows looked like hairlines on a large face. */
-    face_state.line_width = (uint8_t)(face_sz / 60);
-    if (face_state.line_width < 4)
-        face_state.line_width = 4;
+    face_state.line_width = (uint8_t) fs(4);
 
-    face_state.face_sz = face_sz;
     face_state.eye_cw = (uint16_t)(face_sz * 0.45f);
     face_state.mouth_cw = (uint16_t)(face_sz * 0.45f);
     face_state.mouth_ch = (uint16_t)(face_sz * 0.38f);
@@ -398,8 +412,8 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
 
     int16_t eye_width = width * 0.75;
     int16_t eye_height = (eye_width * openness) / 100;
-    if (eye_height < 8)
-        eye_height = 8;
+    if (eye_height < fs(8))
+        eye_height = fs(8);
     int16_t center_x = width / 2;
     int16_t center_y = (height * 0.6) + face_state.bounce_offset;
 
@@ -410,7 +424,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
     line_dsc.opa = LV_OPA_COVER;
 
     int8_t eyebrow_angle = is_left ? face_state.left_eyebrow_angle : face_state.right_eyebrow_angle;
-    int16_t eyebrow_y = center_y - eye_width / 2 - 6 + face_state.eyebrow_height;
+    int16_t eyebrow_y = center_y - eye_width / 2 - fs(6) + face_state.eyebrow_height;
     int16_t eyebrow_width = eye_width * 0.9;
 
     float angle_rad = eyebrow_angle * 3.14159 / 180.0;
@@ -442,14 +456,14 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         lv_draw_rect_dsc_init(&blush_dsc);
         blush_dsc.bg_color = lv_color_make(255, 150, 180);
         blush_dsc.bg_opa = (face_state.blush_intensity * LV_OPA_COVER) / 100;
-        blush_dsc.radius = 8;
+        blush_dsc.radius = fs(8);
         blush_dsc.border_width = 0;
 
         lv_area_t blush_area;
-        blush_area.x1 = center_x - 10;
-        blush_area.y1 = center_y + eye_width / 2 + 2;
-        blush_area.x2 = center_x + 10;
-        blush_area.y2 = center_y + eye_width / 2 + 8;
+        blush_area.x1 = center_x - fs(10);
+        blush_area.y1 = center_y + eye_width / 2 + fs(2);
+        blush_area.x2 = center_x + fs(10);
+        blush_area.y2 = center_y + eye_width / 2 + fs(8);
 
         lv_draw_rect(&layer, &blush_dsc, &blush_area);
     }
@@ -557,7 +571,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         {
             rect_dsc.bg_color = lv_color_make(255, 240, 100);
             rect_dsc.bg_opa = (face_state.sparkle_phase * LV_OPA_COVER) / 100;
-            rect_dsc.radius = 2;
+            rect_dsc.radius = fs(2);
 
             for (int i = 0; i < 6; i++)
             {
@@ -567,10 +581,10 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
                 int16_t spark_y = center_y + spark_dist * sin(angle) * 0.85;
 
                 lv_area_t spark_area;
-                spark_area.x1 = spark_x - 2;
-                spark_area.y1 = spark_y - 2;
-                spark_area.x2 = spark_x + 2;
-                spark_area.y2 = spark_y + 2;
+                spark_area.x1 = spark_x - fs(2);
+                spark_area.y1 = spark_y - fs(2);
+                spark_area.x2 = spark_x + fs(2);
+                spark_area.y2 = spark_y + fs(2);
 
                 lv_draw_rect(&layer, &rect_dsc, &spark_area);
             }
@@ -584,7 +598,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         rect_dsc.border_color = lv_color_black();
         rect_dsc.border_width = face_state.eye_border_width;
         rect_dsc.border_opa = LV_OPA_COVER;
-        rect_dsc.radius = 15;
+        rect_dsc.radius = fs(15);
 
         lv_area_t eye_area;
         eye_area.x1 = center_x - eye_width / 2;
@@ -604,27 +618,27 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
             int16_t iris_center_x = center_x + face_state.pupil_offset_x;
             int16_t iris_center_y = center_y + face_state.pupil_offset_y;
 
-            if (iris_center_x - iris_width / 2 < center_x - eye_width / 2 + 3)
+            if (iris_center_x - iris_width / 2 < center_x - eye_width / 2 + fs(3))
             {
-                iris_center_x = center_x - eye_width / 2 + iris_width / 2 + 3;
+                iris_center_x = center_x - eye_width / 2 + iris_width / 2 + fs(3);
             }
-            if (iris_center_x + iris_width / 2 > center_x + eye_width / 2 - 3)
+            if (iris_center_x + iris_width / 2 > center_x + eye_width / 2 - fs(3))
             {
-                iris_center_x = center_x + eye_width / 2 - iris_width / 2 - 3;
+                iris_center_x = center_x + eye_width / 2 - iris_width / 2 - fs(3);
             }
-            if (iris_center_y - iris_height / 2 < center_y - eye_height / 2 + 3)
+            if (iris_center_y - iris_height / 2 < center_y - eye_height / 2 + fs(3))
             {
-                iris_center_y = center_y - eye_height / 2 + iris_height / 2 + 3;
+                iris_center_y = center_y - eye_height / 2 + iris_height / 2 + fs(3);
             }
-            if (iris_center_y + iris_height / 2 > center_y + eye_height / 2 - 3)
+            if (iris_center_y + iris_height / 2 > center_y + eye_height / 2 - fs(3))
             {
-                iris_center_y = center_y + eye_height / 2 - iris_height / 2 - 3;
+                iris_center_y = center_y + eye_height / 2 - iris_height / 2 - fs(3);
             }
 
             rect_dsc.bg_color = lv_color_make(50, 180, 255);
-            rect_dsc.border_width = 2;
+            rect_dsc.border_width = fs(2);
             rect_dsc.border_color = lv_color_make(30, 140, 230);
-            rect_dsc.radius = 8;
+            rect_dsc.radius = fs(8);
 
             lv_area_t iris_area;
             iris_area.x1 = iris_center_x - iris_width / 2;
@@ -638,7 +652,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
             int16_t pupil_height = iris_height * 0.6;
             rect_dsc.bg_color = lv_color_black();
             rect_dsc.border_width = 0;
-            rect_dsc.radius = 6;
+            rect_dsc.radius = fs(6);
 
             lv_area_t pupil_area;
             pupil_area.x1 = iris_center_x - pupil_width / 2;
@@ -656,7 +670,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
                 highlight_h = 4;
 
             rect_dsc.bg_color = lv_color_white();
-            rect_dsc.radius = 3;
+            rect_dsc.radius = fs(3);
 
             lv_area_t highlight_area;
             highlight_area.x1 = iris_center_x - pupil_width / 3 - highlight_w / 2;
@@ -673,7 +687,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
             if (small_h < 2)
                 small_h = 2;
 
-            rect_dsc.radius = 2;
+            rect_dsc.radius = fs(2);
 
             highlight_area.x1 = iris_center_x + pupil_width / 4 - small_w / 2;
             highlight_area.y1 = iris_center_y - pupil_height / 4 - small_h / 2;
@@ -688,19 +702,19 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
             rect_dsc.bg_color = lv_color_make(255, 255, 100);
             rect_dsc.bg_opa = (face_state.sparkle_phase * LV_OPA_COVER) / 100;
             rect_dsc.border_width = 0;
-            rect_dsc.radius = 2;
+            rect_dsc.radius = fs(2);
 
             for (int i = 0; i < 3; i++)
             {
                 float angle = (i * 120 + face_state.sparkle_phase * 3.6) * 3.14159 / 180.0;
-                int16_t spark_x = center_x + (eye_width / 2 + 8) * cos(angle);
-                int16_t spark_y = center_y + (eye_width / 2 + 8) * sin(angle);
+                int16_t spark_x = center_x + (eye_width / 2 + fs(8)) * cos(angle);
+                int16_t spark_y = center_y + (eye_width / 2 + fs(8)) * sin(angle);
 
                 lv_area_t spark_area;
-                spark_area.x1 = spark_x - 2;
-                spark_area.y1 = spark_y - 2;
-                spark_area.x2 = spark_x + 2;
-                spark_area.y2 = spark_y + 2;
+                spark_area.x1 = spark_x - fs(2);
+                spark_area.y1 = spark_y - fs(2);
+                spark_area.x2 = spark_x + fs(2);
+                spark_area.y2 = spark_y + fs(2);
 
                 lv_draw_rect(&layer, &rect_dsc, &spark_area);
             }
@@ -774,9 +788,9 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         sweat_dsc.bg_color = lv_color_make(120, 200, 255);
         sweat_dsc.bg_opa = is_working ? LV_OPA_90 : LV_OPA_70;
         sweat_dsc.border_color = lv_color_make(80, 150, 240);
-        sweat_dsc.border_width = 1;
+        sweat_dsc.border_width = fs(1);
         sweat_dsc.border_opa = LV_OPA_60;
-        sweat_dsc.radius = 6;
+        sweat_dsc.radius = fs(6);
 
         lv_area_t drop_area;
         drop_area.x1 = drop_x - drop_w;
@@ -788,7 +802,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         sweat_dsc.bg_color = lv_color_white();
         sweat_dsc.bg_opa = LV_OPA_80;
         sweat_dsc.border_width = 0;
-        sweat_dsc.radius = 3;
+        sweat_dsc.radius = fs(3);
 
         lv_area_t shine_area;
         int16_t shine_w = is_working ? 2 : 1;
@@ -807,7 +821,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         rect_dsc.bg_color = lv_color_make(150, 200, 255);
         rect_dsc.bg_opa = LV_OPA_80;
         rect_dsc.border_width = 0;
-        rect_dsc.radius = 5;
+        rect_dsc.radius = fs(5);
 
         int16_t tear_x = center_x + (is_left ? -eye_width / 3 : eye_width / 3);
         int16_t tear_y = center_y + eye_height / 2 + 5 + face_state.tear_fall_offset;
@@ -926,9 +940,9 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         rect_dsc.bg_color = lv_color_make(200, 60, 80);
         rect_dsc.bg_opa = LV_OPA_COVER;
         rect_dsc.border_color = lv_color_black();
-        rect_dsc.border_width = 3;
+        rect_dsc.border_width = fs(3);
         rect_dsc.border_opa = LV_OPA_COVER;
-        rect_dsc.radius = 8;
+        rect_dsc.radius = fs(8);
 
         lv_area_t mouth_area;
         mouth_area.x1 = center_x - grip_width / 2;
@@ -941,7 +955,7 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         rect_dsc.bg_color = lv_color_make(245, 245, 240);
         rect_dsc.bg_opa = LV_OPA_90;
         rect_dsc.border_width = 0;
-        rect_dsc.radius = 3;
+        rect_dsc.radius = fs(3);
 
         lv_area_t teeth_area;
         teeth_area.x1 = mouth_area.x1 + t_margin;
@@ -977,9 +991,9 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         rect_dsc.bg_color = lv_color_make(220, 60, 80);
         rect_dsc.bg_opa = LV_OPA_90;
         rect_dsc.border_color = lv_color_black();
-        rect_dsc.border_width = 3;
+        rect_dsc.border_width = fs(3);
         rect_dsc.border_opa = LV_OPA_COVER;
-        rect_dsc.radius = 12;
+        rect_dsc.radius = fs(12);
 
         lv_area_t mouth_area;
         mouth_area.x1 = center_x - mouth_width / 2;
@@ -994,8 +1008,8 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
             rect_dsc.bg_color = lv_color_make(255, 140, 160);
             rect_dsc.bg_opa = LV_OPA_90;
             rect_dsc.border_color = lv_color_make(200, 80, 100);
-            rect_dsc.border_width = 2;
-            rect_dsc.radius = 8;
+            rect_dsc.border_width = fs(2);
+            rect_dsc.radius = fs(8);
 
             lv_area_t tongue_area;
             int16_t tongue_w = mouth_width / 5;
@@ -1011,19 +1025,19 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         {
             rect_dsc.bg_color = lv_color_make(255, 255, 180);
             rect_dsc.bg_opa = LV_OPA_60;
-            rect_dsc.radius = 2;
+            rect_dsc.radius = fs(2);
 
             for (int i = 0; i < 2; i++)
             {
                 int16_t side = (i == 0) ? -1 : 1;
-                int16_t spark_x = center_x + side * (mouth_width / 2 + 8);
+                int16_t spark_x = center_x + side * (mouth_width / 2 + fs(8));
                 int16_t spark_y = adjusted_y;
 
                 lv_area_t spark_area;
-                spark_area.x1 = spark_x - 2;
-                spark_area.y1 = spark_y - 2;
-                spark_area.x2 = spark_x + 2;
-                spark_area.y2 = spark_y + 2;
+                spark_area.x1 = spark_x - fs(2);
+                spark_area.y1 = spark_y - fs(2);
+                spark_area.x2 = spark_x + fs(2);
+                spark_area.y2 = spark_y + fs(2);
                 lv_draw_rect(&layer, &rect_dsc, &spark_area);
             }
         }
@@ -1042,9 +1056,9 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
             rect_dsc.bg_color = lv_color_make(200, 70, 90);
             rect_dsc.bg_opa = LV_OPA_90;
             rect_dsc.border_color = lv_color_black();
-            rect_dsc.border_width = 3;
+            rect_dsc.border_width = fs(3);
             rect_dsc.border_opa = LV_OPA_COVER;
-            rect_dsc.radius = 4;
+            rect_dsc.radius = fs(4);
 
             lv_area_t diamond_area;
             diamond_area.x1 = center_x - 6;
@@ -1072,7 +1086,7 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
             lv_draw_rect(&layer, &rect_dsc, &diamond_area);
 
             rect_dsc.border_width = 0;
-            rect_dsc.radius = 2;
+            rect_dsc.radius = fs(2);
             diamond_area.x1 = center_x - 4;
             diamond_area.y1 = center_y + curve_offset - 4;
             diamond_area.x2 = center_x + 4;
@@ -1088,9 +1102,9 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
             rect_dsc.bg_color = lv_color_make(200, 70, 90);
             rect_dsc.bg_opa = LV_OPA_90;
             rect_dsc.border_color = lv_color_black();
-            rect_dsc.border_width = 3;
+            rect_dsc.border_width = fs(3);
             rect_dsc.border_opa = LV_OPA_COVER;
-            rect_dsc.radius = 8;
+            rect_dsc.radius = fs(8);
 
             lv_area_t mouth_area;
             mouth_area.x1 = center_x - mouth_width_oval;
@@ -1104,7 +1118,7 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         rect_dsc.bg_color = lv_color_make(255, 255, 150);
         rect_dsc.bg_opa = LV_OPA_70;
         rect_dsc.border_width = 0;
-        rect_dsc.radius = 2;
+        rect_dsc.radius = fs(2);
 
         for (int i = 0; i < 4; i++)
         {
@@ -1113,10 +1127,10 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
             int16_t spark_y = center_y + curve_offset + (mouth_width / 3) * sin(angle);
 
             lv_area_t spark_area;
-            spark_area.x1 = spark_x - 2;
-            spark_area.y1 = spark_y - 2;
-            spark_area.x2 = spark_x + 2;
-            spark_area.y2 = spark_y + 2;
+            spark_area.x1 = spark_x - fs(2);
+            spark_area.y1 = spark_y - fs(2);
+            spark_area.x2 = spark_x + fs(2);
+            spark_area.y2 = spark_y + fs(2);
             lv_draw_rect(&layer, &rect_dsc, &spark_area);
         }
     }
@@ -1129,9 +1143,9 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         rect_dsc.bg_color = lv_color_make(180, 50, 70);
         rect_dsc.bg_opa = LV_OPA_90;
         rect_dsc.border_color = lv_color_black();
-        rect_dsc.border_width = 3;
+        rect_dsc.border_width = fs(3);
         rect_dsc.border_opa = LV_OPA_COVER;
-        rect_dsc.radius = 8;
+        rect_dsc.radius = fs(8);
 
         lv_area_t mouth_area;
         mouth_area.x1 = center_x - mouth_width / 2;
@@ -1146,7 +1160,7 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
             rect_dsc.bg_color = lv_color_make(150, 200, 255);
             rect_dsc.bg_opa = LV_OPA_70;
             rect_dsc.border_width = 0;
-            rect_dsc.radius = 4;
+            rect_dsc.radius = fs(4);
 
             int16_t tear_base_y = center_y - 8;
             int16_t tear_y = tear_base_y + face_state.tear_fall_offset;
@@ -1208,9 +1222,9 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         }
 
         rect_dsc.border_color = lv_color_black();
-        rect_dsc.border_width = 2;
+        rect_dsc.border_width = fs(2);
         rect_dsc.border_opa = LV_OPA_COVER;
-        rect_dsc.radius = 6;
+        rect_dsc.radius = fs(6);
 
         lv_area_t mouth_area;
         mouth_area.x1 = center_x - smile_width / 2;

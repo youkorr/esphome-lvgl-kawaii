@@ -1,7 +1,7 @@
 # lvgl_kawaii_face (ESPHome)
 
-ESPHome wrapper around the [lvgl_kawaii_face](../../lvgl_kawaii_face-main) C
-component — an animated kawaii face for LVGL 9. It draws eyes, eyebrows, blush
+ESPHome wrapper around [0015/lvgl_kawaii_face](https://github.com/0015/lvgl_kawaii_face)
+by Eric Nam (MIT) — an animated kawaii face for LVGL 9. It draws eyes, eyebrows, blush
 and a mouth on LVGL canvases with per-emotion animations, and exposes the
 emotion as an ESPHome **action** so the face can react to your automations,
 most notably the **voice assistant** pipeline.
@@ -92,8 +92,11 @@ then reported as an error instead of silently rendering nowhere.
 ### Size
 
 The face is `min(width, height)` of `parent_id`, centred in it — so you size
-the face by sizing the parent object. Around **300–360** matches the look of
-the demo GIF; go bigger only if you want it to fill the screen.
+the face by sizing the parent object. Any size works: the drawing constants
+(corner radii, outline widths, blush, sparkles) are scaled from the upstream
+reference panel of 135×135, so proportions hold. Left absolute, a 340px face
+had 15px-radius eyes — nearly square — with hairline brows and dot-sized
+blush.
 
 ### Background colour and palette
 
