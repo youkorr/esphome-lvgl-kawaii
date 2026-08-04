@@ -22,6 +22,7 @@ external_components:
 lvgl:
   pages:
     - id: page_face
+      bg_color: 0x101820        # also used as the face's background
       widgets:
         - obj:
             id: face_panel
@@ -34,7 +35,7 @@ lvgl:
 
 lvgl_kawaii_face:
   id: face
-  parent_id: face_panel       # optional; omit to fill the active screen
+  parent_id: face_panel       # widget id, page id, or omit to fill the screen
   initial_emotion: neutral
   animation_speed: 30ms       # timer interval (~33 FPS)
   blink_interval: 3000ms
@@ -44,7 +45,8 @@ lvgl_kawaii_face:
 
 | Option | Default | Description |
 |---|---|---|
-| `parent_id` | *(screen)* | id of an LVGL widget the face fills. Omit to use the active screen. |
+| `parent_id` | *(active screen)* | id of the LVGL widget **or page** the face fills. Validated against the ids declared under `lvgl:`. Omit to use the active screen. |
+| `bg_color` | *(inherited)* | Colour the face canvases are cleared with. Defaults to the background of the first opaque ancestor (the panel, else the page). |
 | `animation_speed` | `30ms` | Animation update interval. |
 | `blink_interval` | `3000ms` | Auto-blink period. |
 | `auto_blink` | `true` | Enable automatic blinking. |
@@ -54,6 +56,46 @@ lvgl_kawaii_face:
 | `response_fallback` | `speaking` | Expression used when a response matches no keyword. |
 
 > The C component is a singleton — configure a single `lvgl_kawaii_face:` block.
+
+### Putting the face on a page other than the first
+
+`parent_id` is honoured whatever the order of the YAML blocks. Up to and
+including the previous release the id was read while the generated `setup()`
+declared it — before the `lvgl:` component had assigned it — so the face got a
+null parent and fell back to `lv_screen_active()`: it always appeared on the
+page showing at boot, never on the configured one. The id is now resolved at
+initialisation time instead, so this works:
+
+```yaml
+lvgl:
+  pages:
+    - id: page_home          # page 1, no face here
+      widgets: [...]
+    - id: page_face          # page 2
+      widgets:
+        - obj:
+            id: face_panel
+            width: 520
+            height: 520
+            align: CENTER
+            bg_opa: TRANSP
+
+lvgl_kawaii_face:
+  id: face
+  parent_id: face_panel      # or `page_face` to fill the whole page
+```
+
+The face size follows the parent: it is `min(width, height)` of the parent
+object, centred in it. A parent with no size yet is retried for a few seconds,
+then reported as an error instead of silently rendering nowhere.
+
+### Background colour
+
+The eyes and mouth are drawn on opaque LVGL canvases, so they have to be
+cleared with the colour behind them or the face shows up as three rectangles.
+By default the component walks up from `parent_id` and takes the first
+ancestor with an opaque background — give your page a `bg_color` and it just
+works. Set `bg_color:` explicitly to override it.
 
 ## Action: `lvgl_kawaii_face.set_emotion`
 
@@ -143,6 +185,9 @@ See [`example_esp32p4_waveshare.yaml`](example_esp32p4_waveshare.yaml) for a
 board-specific snippet (1024×600, rotation 180, `okay_nabu`) to merge into your
 existing config.
 
-Canvas buffers (tens of KB) are allocated in internal RAM first, then PSRAM —
-both PPA-accessible. Increase `face_panel` size for a larger face (PSRAM takes
-over).
+Canvas buffers (tens of KB) are allocated in PSRAM first, then internal RAM —
+both PPA-accessible. Increase `face_panel` size for a larger face.
+
+The animation timer keeps running when the face's page is hidden, but the
+canvases are not redrawn while it is off-screen — an idle face on page 2 costs
+no display bandwidth, and it is refreshed as soon as its page is shown again.

@@ -5,6 +5,7 @@
 
 #include "lvgl_kawaii_face.h"
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 
 #ifdef ESP_PLATFORM
@@ -90,6 +91,11 @@ static const char *TAG = "face_anim";
 #define DEFAULT_ANIM_SPEED_MS 30
 #define DEFAULT_BLINK_INTERVAL 3000
 
+/* Lower bounds. A 0ms timer period runs the callback on every LVGL tick and
+ * starves the rest of the UI; a 0ms blink interval blinks non-stop. */
+#define MIN_ANIM_SPEED_MS 5
+#define MIN_BLINK_INTERVAL 200
+
 typedef struct
 {
     lv_obj_t *left_eye_canvas;
@@ -133,6 +139,11 @@ typedef struct
     uint16_t mouth_cw;
     uint16_t mouth_ch;
 
+    lv_color_t bg_color;
+    /* Set when a redraw was skipped because the face was off-screen, so the
+     * canvases are refreshed as soon as its page is shown again. */
+    bool redraw_pending;
+
     lv_timer_t *anim_timer;
     bool initialized;
 } face_state_t;
@@ -144,6 +155,44 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve);
 static void update_emotion_parameters(face_emotion_t emotion, uint8_t *left_eye, uint8_t *right_eye, int8_t *mouth,
                                       int8_t *left_brow, int8_t *right_brow, int8_t *brow_height);
 static void animation_timer_cb(lv_timer_t *timer);
+
+/* The eye/mouth canvases are opaque, so they have to be cleared with the
+ * colour of whatever sits behind them or the face renders as three boxes.
+ * Walk up from the parent to the screen and take the first background that is
+ * actually painted; a fully transparent panel contributes nothing visually. */
+static lv_color_t face_resolve_bg_color(lv_obj_t *parent)
+{
+    for (lv_obj_t *obj = parent; obj != NULL; obj = lv_obj_get_parent(obj))
+    {
+        if (lv_obj_get_style_bg_opa(obj, LV_PART_MAIN) >= LV_OPA_50)
+            return lv_obj_get_style_bg_color(obj, LV_PART_MAIN);
+    }
+    return lv_color_white();
+}
+
+/* Release everything face_animation_init() may have created so far. Callers
+ * retry initialisation (the parent may not be laid out yet, PSRAM may not be
+ * free yet), and without this every attempt leaked a container plus up to
+ * three canvas buffers. */
+static void face_init_cleanup(void)
+{
+    if (face_state.face_container)
+    {
+        /* Deleting the container also deletes the canvases parented to it. */
+        lv_obj_del(face_state.face_container);
+        face_state.face_container = NULL;
+    }
+    face_state.left_eye_canvas = NULL;
+    face_state.right_eye_canvas = NULL;
+    face_state.mouth_canvas = NULL;
+
+    free(face_state.left_eye_buf);
+    free(face_state.right_eye_buf);
+    free(face_state.mouth_buf);
+    face_state.left_eye_buf = NULL;
+    face_state.right_eye_buf = NULL;
+    face_state.mouth_buf = NULL;
+}
 
 esp_err_t face_animation_init(face_config_t *config)
 {
@@ -165,15 +214,43 @@ esp_err_t face_animation_init(face_config_t *config)
         face_state.config.animation_speed = DEFAULT_ANIM_SPEED_MS;
         face_state.config.blink_interval = DEFAULT_BLINK_INTERVAL;
         face_state.config.auto_blink = true;
+        face_state.config.bg_color_set = false;
     }
+
+    if (face_state.config.animation_speed < MIN_ANIM_SPEED_MS)
+        face_state.config.animation_speed = MIN_ANIM_SPEED_MS;
+    if (face_state.config.blink_interval < MIN_BLINK_INTERVAL)
+        face_state.config.blink_interval = MIN_BLINK_INTERVAL;
 
     lv_obj_t *parent_obj = (face_state.config.parent != NULL)
                                ? face_state.config.parent
                                : lv_scr_act();
+    if (parent_obj == NULL)
+    {
+        FACE_LOGE(TAG, "No parent object and no active screen");
+        face_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+
     lv_obj_update_layout(parent_obj);
     int32_t parent_w = lv_obj_get_width(parent_obj);
     int32_t parent_h = lv_obj_get_height(parent_obj);
+    /* A parent that has not been laid out yet reports 0 (or a negative size
+     * for a not-yet-resolved percentage). Bail out instead of creating
+     * zero-sized canvases: lv_canvas_set_buffer() would then index a buffer
+     * that malloc(0) never really allocated. The caller retries. */
+    if (parent_w <= 0 || parent_h <= 0)
+    {
+        FACE_LOGW(TAG, "Parent has no size yet (%dx%d), deferring init", parent_w, parent_h);
+        face_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+
     uint16_t face_sz = (uint16_t)((parent_w < parent_h) ? parent_w : parent_h);
+
+    face_state.bg_color = face_state.config.bg_color_set
+                              ? face_state.config.bg_color
+                              : face_resolve_bg_color(parent_obj);
 
     face_state.face_sz = face_sz;
     face_state.eye_cw = (uint16_t)(face_sz * 0.45f);
@@ -202,7 +279,10 @@ esp_err_t face_animation_init(face_config_t *config)
 
     if (!face_state.left_eye_buf || !face_state.right_eye_buf || !face_state.mouth_buf)
     {
-        FACE_LOGE(TAG, "Failed to allocate canvas buffers");
+        FACE_LOGE(TAG, "Failed to allocate canvas buffers (%u + %u bytes)",
+                  (unsigned)(2 * eye_buf_size * sizeof(lv_color_t)),
+                  (unsigned)(mouth_buf_size * sizeof(lv_color_t)));
+        face_init_cleanup();
         face_unlock();
         return ESP_ERR_NO_MEM;
     }
@@ -247,6 +327,7 @@ esp_err_t face_animation_init(face_config_t *config)
     face_state.bounce_offset = 0;
     face_state.sparkle_phase = 0;
     face_state.heart_beat_phase = 0;
+    face_state.redraw_pending = false;
 
     draw_eye(face_state.left_eye_canvas, face_state.left_eye_openness, true);
     draw_eye(face_state.right_eye_canvas, face_state.right_eye_openness, false);
@@ -255,6 +336,13 @@ esp_err_t face_animation_init(face_config_t *config)
     face_state.anim_timer = lv_timer_create(animation_timer_cb,
                                             face_state.config.animation_speed,
                                             NULL);
+    if (face_state.anim_timer == NULL)
+    {
+        FACE_LOGE(TAG, "Failed to create the animation timer");
+        face_init_cleanup();
+        face_unlock();
+        return ESP_ERR_NO_MEM;
+    }
 
     face_unlock();
 
@@ -272,7 +360,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
     uint16_t width = face_state.eye_cw;
     uint16_t height = face_state.eye_cw;
 
-    lv_canvas_fill_bg(canvas, lv_color_white(), LV_OPA_COVER);
+    lv_canvas_fill_bg(canvas, face_state.bg_color, LV_OPA_COVER);
 
     lv_layer_t layer;
     lv_canvas_init_layer(canvas, &layer);
@@ -722,7 +810,7 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
     uint16_t width = face_state.mouth_cw;
     uint16_t height = face_state.mouth_ch;
 
-    lv_canvas_fill_bg(canvas, lv_color_white(), LV_OPA_COVER);
+    lv_canvas_fill_bg(canvas, face_state.bg_color, LV_OPA_COVER);
 
     lv_layer_t layer;
     lv_canvas_init_layer(canvas, &layer);
@@ -1953,23 +2041,16 @@ static void animation_timer_cb(lv_timer_t *timer)
         }
     }
 
-    if (face_state.current_emotion != FACE_LOVE)
+    /* Fade the hearts out after leaving FACE_LOVE. heart_beat_phase is
+     * unsigned, so subtracting past zero used to wrap around to ~250, which
+     * the >= 100 branch then clamped back to full — the hearts flared up again
+     * instead of disappearing. Saturate at zero instead. */
+    if (face_state.current_emotion != FACE_LOVE && face_state.heart_beat_phase > 0)
     {
-        if (face_state.heart_beat_phase > 0)
-        {
-            static int8_t heart_direction = -1;
-            face_state.heart_beat_phase += heart_direction * 5;
-            if (face_state.heart_beat_phase <= 0)
-            {
-                face_state.heart_beat_phase = 0;
-                heart_direction = 1;
-            }
-            else if (face_state.heart_beat_phase >= 100)
-            {
-                face_state.heart_beat_phase = 100;
-                heart_direction = -1;
-            }
-        }
+        face_state.heart_beat_phase = (face_state.heart_beat_phase >= 5)
+                                          ? face_state.heart_beat_phase - 5
+                                          : 0;
+        needs_redraw = true;
     }
 
     if (face_state.transition_progress < 100 && face_state.blush_intensity > 0)
@@ -1977,8 +2058,20 @@ static void animation_timer_cb(lv_timer_t *timer)
         needs_redraw = true;
     }
 
-    if (needs_redraw)
+    /* Redrawing a canvas invalidates it, so an off-screen face would still
+     * push ~33 flushes per second through the display driver. Skip the draw
+     * while the face's page is not shown and catch up when it comes back —
+     * the animation state itself keeps running, only the pixels wait. */
+    bool visible = lv_obj_is_visible(face_state.face_container);
+    if (!visible)
     {
+        face_state.redraw_pending |= needs_redraw;
+        return;
+    }
+
+    if (needs_redraw || face_state.redraw_pending)
+    {
+        face_state.redraw_pending = false;
         draw_eye(face_state.left_eye_canvas, face_state.left_eye_openness, true);
         draw_eye(face_state.right_eye_canvas, face_state.right_eye_openness, false);
         draw_mouth(face_state.mouth_canvas, face_state.mouth_curve);
@@ -2101,29 +2194,21 @@ void face_animation_deinit(void)
 
     face_lock();
 
+    /* Clear the flag first: the timer callback bails out on it, so a redraw
+     * cannot run against half-freed state. */
+    face_state.initialized = false;
+
     if (face_state.anim_timer)
     {
         lv_timer_del(face_state.anim_timer);
         face_state.anim_timer = NULL;
     }
 
-    if (face_state.left_eye_canvas)
-        lv_obj_del(face_state.left_eye_canvas);
-    if (face_state.right_eye_canvas)
-        lv_obj_del(face_state.right_eye_canvas);
-    if (face_state.mouth_canvas)
-        lv_obj_del(face_state.mouth_canvas);
-    if (face_state.face_container)
-        lv_obj_del(face_state.face_container);
+    /* Deleting the container deletes the canvases with it — deleting them
+     * individually first and then the container would touch freed objects. */
+    face_init_cleanup();
 
     face_unlock();
-
-    if (face_state.left_eye_buf)
-        free(face_state.left_eye_buf);
-    if (face_state.right_eye_buf)
-        free(face_state.right_eye_buf);
-    if (face_state.mouth_buf)
-        free(face_state.mouth_buf);
 
     memset(&face_state, 0, sizeof(face_state_t));
 

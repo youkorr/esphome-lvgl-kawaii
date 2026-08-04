@@ -21,9 +21,10 @@
 #else
    typedef int esp_err_t;
 #  ifndef ESP_OK
-#    define ESP_OK          ((esp_err_t) 0)
-#    define ESP_FAIL        ((esp_err_t)-1)
-#    define ESP_ERR_NO_MEM  ((esp_err_t) 0x101)
+#    define ESP_OK                 ((esp_err_t) 0)
+#    define ESP_FAIL               ((esp_err_t)-1)
+#    define ESP_ERR_NO_MEM         ((esp_err_t) 0x101)
+#    define ESP_ERR_INVALID_STATE  ((esp_err_t) 0x103)
 #  endif
 #endif
 
@@ -98,6 +99,14 @@ typedef struct {
     uint32_t animation_speed;  // Animation update interval in ms
     uint32_t blink_interval;   // Auto-blink interval in ms
     bool     auto_blink;       // Enable automatic blinking
+    /* Colour the eye/mouth canvases are cleared with — the face's "skin".
+     * The canvases are opaque rectangles, so this must match the background
+     * they sit on or the face shows up as three visible boxes. When
+     * bg_color_set is false the colour is taken from the first ancestor with
+     * an opaque background (the panel, else the screen), falling back to
+     * white — which blends automatically in the common cases. */
+    lv_color_t bg_color;
+    bool       bg_color_set;
 } face_config_t;
 
 /**

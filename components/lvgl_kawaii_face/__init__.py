@@ -10,12 +10,14 @@ error). See example.yaml for a full voice-assistant wiring.
 import esphome.automation as automation
 import esphome.codegen as cg
 import esphome.config_validation as cv
+from esphome.components.lvgl.types import lv_obj_t
 from esphome.const import CONF_ID
 
 CODEOWNERS = ["@youkorr"]
 DEPENDENCIES = ["lvgl"]
 
 CONF_PARENT_ID = "parent_id"
+CONF_BG_COLOR = "bg_color"
 CONF_ANIMATION_SPEED = "animation_speed"
 CONF_BLINK_INTERVAL = "blink_interval"
 CONF_AUTO_BLINK = "auto_blink"
@@ -68,8 +70,14 @@ KawaiiFaceSetEmotionFromTextAction = kawaii_ns.class_(
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(KawaiiFaceComponent),
-        # LVGL widget id to host the face. Omit to fill the active screen.
-        cv.Optional(CONF_PARENT_ID): cv.string,
+        # id of the LVGL widget or page hosting the face. Validated against the
+        # ids the lvgl component declares, so a typo is a config error instead
+        # of a face that silently lands on the active screen. Omit to fill the
+        # active screen.
+        cv.Optional(CONF_PARENT_ID): cv.use_id(lv_obj_t),
+        # Colour the face canvases are cleared with. Defaults to the background
+        # of the first opaque ancestor (panel, else page), so the face blends in.
+        cv.Optional(CONF_BG_COLOR): cv.hex_int_range(min=0, max=0xFFFFFF),
         cv.Optional(
             CONF_ANIMATION_SPEED, default="30ms"
         ): cv.positive_time_period_milliseconds,
@@ -112,10 +120,24 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
 
-    # The LVGL widget id maps to a global lv_obj_t* created by the lvgl
-    # component; reference it directly as the face's parent object.
     if parent_id := config.get(CONF_PARENT_ID):
-        cg.add(var.set_parent_obj(cg.RawExpression(parent_id)))
+        # An lvgl widget/page id is a *global* that the lvgl component only
+        # assigns while the generated setup() runs. Reading it here — as this
+        # component used to, via a bare RawExpression — captured a null pointer
+        # whenever our statement was emitted first, and a null parent makes the
+        # C component fall back to lv_screen_active(): the face always appeared
+        # on the page being displayed at boot, never on the configured one.
+        #
+        # Wait for the id to be declared, then pass a lambda that reads the
+        # global at init time instead. kawaii_parent_obj() overloads over
+        # lv_obj_t* / LvCompound* / LvPageType*, so a widget id and a page id
+        # both work.
+        await cg.get_variable(parent_id)
+        getter = f"[]() -> lv_obj_t * {{ return kawaii_parent_obj({parent_id}); }}"
+        cg.add(var.set_parent_getter(cg.RawExpression(getter)))
+
+    if (bg_color := config.get(CONF_BG_COLOR)) is not None:
+        cg.add(var.set_bg_color(bg_color))
 
     cg.add(var.set_animation_speed(config[CONF_ANIMATION_SPEED].total_milliseconds))
     cg.add(var.set_blink_interval(config[CONF_BLINK_INTERVAL].total_milliseconds))

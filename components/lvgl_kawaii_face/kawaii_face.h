@@ -5,10 +5,14 @@
 #include "esphome/core/log.h"
 
 #include <cctype>
+#include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifdef USE_LVGL
+// LvCompound / LvPageType, so a page id can be used as the face's parent.
+#include "esphome/components/lvgl/lvgl_esphome.h"
 // Pulls in <lvgl.h> (for lv_obj_t / lv_lock / lv_unlock) and the kawaii face
 // C API. The header carries extern "C" guards so the symbols compiled from
 // lvgl_kawaii_face.c link cleanly into this C++ translation unit.
@@ -19,6 +23,19 @@ namespace esphome {
 namespace lvgl_kawaii_face {
 
 static const char *const TAG = "kawaii_face";
+
+#ifdef USE_LVGL
+// The generated code resolves `parent_id` to whatever variable the lvgl
+// component declared for that id. A plain widget is an `lv_obj_t *`, while a
+// page — or any compound widget — is a wrapper object owning one. These
+// overloads let the generated lambda hand us either kind without the Python
+// side having to know which it got.
+inline lv_obj_t *kawaii_parent_obj(lv_obj_t *obj) { return obj; }
+inline lv_obj_t *kawaii_parent_obj(lvgl::LvCompound *compound) {
+  return compound == nullptr ? nullptr : compound->obj;
+}
+inline lv_obj_t *kawaii_parent_obj(lvgl::LvPageType *page) { return page == nullptr ? nullptr : page->obj; }
+#endif
 
 /**
  * ESPHome wrapper around the lvgl_kawaii_face C component.
@@ -33,7 +50,16 @@ static const char *const TAG = "kawaii_face";
 class KawaiiFaceComponent : public Component {
  public:
 #ifdef USE_LVGL
-  void set_parent_obj(lv_obj_t *obj) { this->parent_obj_ = obj; }
+  // The parent is passed as a *getter*, not a pointer: LVGL widget and page
+  // variables are globals the lvgl component only assigns while the generated
+  // setup() runs, so reading one at configuration time would capture a null
+  // pointer — which silently fell back to lv_screen_active() and put the face
+  // on whichever page happened to be showing (always the first one).
+  void set_parent_getter(std::function<lv_obj_t *()> getter) { this->parent_getter_ = std::move(getter); }
+  void set_bg_color(uint32_t rgb) {
+    this->bg_color_ = lv_color_hex(rgb);
+    this->bg_color_set_ = true;
+  }
 #endif
   void set_animation_speed(uint32_t ms) { this->animation_speed_ = ms; }
   void set_blink_interval(uint32_t ms) { this->blink_interval_ = ms; }
@@ -75,27 +101,52 @@ class KawaiiFaceComponent : public Component {
 #endif
   }
 
-  // Deferred init: by the first loop() the LVGL stack is fully up and the
-  // parent widget pointer (a global assigned during lvgl setup) is valid.
+  // Deferred init: by the first loop() the LVGL stack is fully up, every
+  // widget and page global has been assigned, and the parent can be laid out.
   void loop() override {
 #ifdef USE_LVGL
     if (this->initialized_)
       return;
 
+    // Retries are throttled and bounded: the parent may need a few frames to
+    // get a size, but a parent that never gets one must not spin the loop and
+    // flood the log forever.
+    const uint32_t now = millis();
+    if (this->attempts_ != 0 && now - this->last_attempt_ < INIT_RETRY_INTERVAL_MS)
+      return;
+    this->last_attempt_ = now;
+    this->attempts_++;
+
+    lv_obj_t *parent = this->parent_getter_ ? this->parent_getter_() : nullptr;
+    if (this->parent_getter_ && parent == nullptr) {
+      // Falling back to the active screen here is exactly the bug this getter
+      // exists to prevent, so treat it as an error instead.
+      ESP_LOGE(TAG, "Configured parent_id is not a valid LVGL object yet");
+      this->fail_or_retry_();
+      return;
+    }
+
     face_config_t cfg{};
-    cfg.parent = this->parent_obj_;  // nullptr -> fills the active screen
+    cfg.parent = parent;  // nullptr -> fills the active screen
     cfg.animation_speed = this->animation_speed_;
     cfg.blink_interval = this->blink_interval_;
     cfg.auto_blink = this->auto_blink_;
+    cfg.bg_color_set = this->bg_color_set_;
+    if (this->bg_color_set_)
+      cfg.bg_color = this->bg_color_;
 
     esp_err_t err = face_animation_init(&cfg);
     if (err != ESP_OK) {
-      // Most likely the canvas buffers could not be allocated. Retry next loop.
-      ESP_LOGW(TAG, "face_animation_init failed (err %d), will retry", (int) err);
+      // Either the parent has no size yet or the canvas buffers would not fit.
+      ESP_LOGW(TAG, "face_animation_init failed (err %d), attempt %u", (int) err, (unsigned) this->attempts_);
+      this->fail_or_retry_();
       return;
     }
 
     this->initialized_ = true;
+    // Everything from here on is driven by the LVGL timer, so this component
+    // has nothing left to do on the main loop.
+    this->disable_loop();
     ESP_LOGCONFIG(TAG, "Kawaii face initialised (speed %ums, blink %ums, auto_blink %s)",
                   (unsigned) this->animation_speed_, (unsigned) this->blink_interval_,
                   this->auto_blink_ ? "YES" : "NO");
@@ -109,6 +160,9 @@ class KawaiiFaceComponent : public Component {
 
   void dump_config() override {
     ESP_LOGCONFIG(TAG, "Kawaii Face:");
+#ifdef USE_LVGL
+    ESP_LOGCONFIG(TAG, "  parent: %s", this->parent_getter_ ? "configured widget/page" : "active screen");
+#endif
     ESP_LOGCONFIG(TAG, "  animation_speed: %u ms", (unsigned) this->animation_speed_);
     ESP_LOGCONFIG(TAG, "  blink_interval: %u ms", (unsigned) this->blink_interval_);
     ESP_LOGCONFIG(TAG, "  auto_blink: %s", this->auto_blink_ ? "YES" : "NO");
@@ -149,6 +203,21 @@ class KawaiiFaceComponent : public Component {
   }
 
  protected:
+  // Roughly 5s of retries at 250ms — long enough for the first frames to lay
+  // the parent out, short enough that a misconfiguration is reported quickly.
+  static constexpr uint32_t INIT_RETRY_INTERVAL_MS = 250;
+  static constexpr uint8_t MAX_INIT_ATTEMPTS = 20;
+
+  void fail_or_retry_() {
+    if (this->attempts_ < MAX_INIT_ATTEMPTS)
+      return;
+    ESP_LOGE(TAG,
+             "Giving up after %u attempts. Check that parent_id points at a widget "
+             "with a non-zero width/height, and that enough RAM is free.",
+             (unsigned) MAX_INIT_ATTEMPTS);
+    this->mark_failed();
+  }
+
   static std::string to_lower_(const std::string &in) {
     std::string out = in;
     for (auto &c : out)
@@ -236,8 +305,13 @@ class KawaiiFaceComponent : public Component {
     return false;
   }
 
-  lv_obj_t *parent_obj_{nullptr};
+  std::function<lv_obj_t *()> parent_getter_{};
+  lv_color_t bg_color_{};
+  bool bg_color_set_{false};
 #endif
+
+  uint32_t last_attempt_{0};
+  uint8_t attempts_{0};
 
   uint32_t animation_speed_{30};
   uint32_t blink_interval_{3000};

@@ -225,16 +225,16 @@ external_components:
   - source:
       type: git
       url: https://github.com/youkorr/esphome-lvgl-kawaii
-      ref: claude/lvgl-kawaii-face-component-bvko4e
+      ref: claude/lvgl-kawaii-face-bugs-j225qm
     components: [lvgl_kawaii_face]
     refresh: 0s
 
   - source:
       type: git
       url: https://github.com/youkorr/lvgl_9.5
-      ref: claude/jolly-lamport-ERZOC #claude/mit-license-face-to-face-p9fc6m  #lvgl-ppa-msync-fix #claude/jolly-lamport-ERZOC  #6dc5b02f3e6940e782d12fd6748154c0c384272d #claude/jolly-lamport-ERZOC  #claude/fix-lottie-esp32-crash-K7tM1 #claude/fix-lottie-esp32-crashes-8gqrJ #claude/fix-lottie-esp32-crash-vVG5Y #claude/fix-lottie-esp32-crashes-8gqrJ #claude/investigate-pr-conflicts-jyqoy #claude/add-lvgl-example-GJsCN #claude/create-sphere-BVofQ # claude/home-assistant-integration-6apll
+      ref: claude/lvgl-kawaii-face-bugs-j225qm #claude/jolly-lamport-ERZOC #claude/mit-license-face-to-face-p9fc6m  #lvgl-ppa-msync-fix #6dc5b02f3e6940e782d12fd6748154c0c384272d #claude/fix-lottie-esp32-crash-K7tM1 #claude/fix-lottie-esp32-crashes-8gqrJ #claude/fix-lottie-esp32-crash-vVG5Y #claude/investigate-pr-conflicts-jyqoy #claude/add-lvgl-example-GJsCN #claude/create-sphere-BVofQ # claude/home-assistant-integration-6apll
     components: [lvgl, image, font]
-    refresh: 0s   
+    refresh: 0s
 
 esp32_hosted:
   variant: ESP32C6
@@ -409,6 +409,14 @@ micro_wake_word:
 #    - hey_jarvis
   on_wake_word_detected:
     - component.update: main_display
+    # Le mot d'éveil amène le visage à l'écran et le réveille.
+    - lvgl.page.show:
+        id: page_face
+        animation: MOVE_LEFT
+        time: 250ms
+    - lvgl_kawaii_face.set_emotion:
+        id: face
+        emotion: excited
     - voice_assistant.start:
         wake_word: !lambda return wake_word;
 
@@ -424,15 +432,24 @@ voice_assistant:
   on_start:
     - component.update: main_display
 
-
   on_listening:
     - component.update: main_display
+    - lvgl_kawaii_face.set_emotion:
+        id: face
+        emotion: listening
 
   on_stt_end:
     - component.update: main_display
+    - lvgl_kawaii_face.set_emotion:
+        id: face
+        emotion: thinking
 
+  # `x` = le texte prononcé : le visage suit le CONTENU de la réponse.
   on_tts_start:
     - component.update: main_display
+    - lvgl_kawaii_face.set_emotion_from_text:
+        id: face
+        text: !lambda return x;
 
   on_tts_end:
     - component.update: main_display
@@ -451,11 +468,17 @@ voice_assistant:
             - not:
                 media_player.is_playing:
     - component.update: main_display
+    - lvgl_kawaii_face.set_emotion:
+        id: face
+        emotion: neutral
 
     - micro_wake_word.start:
 
   on_error:
     - component.update: main_display
+    - lvgl_kawaii_face.set_emotion:
+        id: face
+        emotion: error
 
 
   on_client_connected:
@@ -532,9 +555,107 @@ lvgl:
   byte_order: little_endian
   fps_benchmark: true
   perf_monitor: true
-  rotation: 180        
-    
-    
-  
+  rotation: 180
 
-  
+  # Deux pages, et le visage est sur la DEUXIÈME : c'est exactement le cas qui
+  # ne marchait pas (le visage se créait toujours sur la page affichée au
+  # démarrage). Au boot on doit voir « Page 1 », pas le visage.
+  pages:
+    - id: page_home
+      bg_color: ${background_color}
+      widgets:
+        - label:
+            id: home_title
+            text: "Page 1 - accueil"
+            text_color: ${text_color}
+            text_font: montserrat_38
+            align: TOP_MID
+            y: 60
+
+        - label:
+            id: home_hint
+            text: "Le visage est sur la page 2 (dis « okay nabu » ou appuie ci-dessous)"
+            text_color: ${text_color_secondary}
+            text_font: montserrat_20
+            align: TOP_MID
+            y: 130
+
+        - button:
+            id: btn_show_face
+            width: 320
+            height: 90
+            align: CENTER
+            bg_color: 0x1F6FEB
+            radius: 45
+            widgets:
+              - label:
+                  text: "Voir le visage"
+                  text_color: 0xFFFFFF
+                  text_font: montserrat_28
+                  align: CENTER
+            on_click:
+              - lvgl.page.show:
+                  id: page_face
+                  animation: MOVE_LEFT
+                  time: 250ms
+
+    - id: page_face
+      bg_color: ${background_color}
+      widgets:
+        # Le conteneur du visage. Sa taille définit celle du visage : le
+        # composant s'adapte tout seul (min(width, height)).
+        #
+        # Il a un fond OPAQUE clair : les canvas des yeux et de la bouche sont
+        # opaques, le composant reprend automatiquement la couleur du premier
+        # parent opaque comme « peau ». Sur un fond noir les sourcils (brun
+        # foncé) et le contour des yeux (noir) disparaîtraient — d'où cette
+        # plaque claire. Pour un visage sur fond noir : bg_opa: TRANSP ici.
+        - obj:
+            id: face_panel
+            width: 520
+            height: 520
+            align: CENTER
+            y: -20
+            bg_color: 0xF7F0E8
+            bg_opa: COVER
+            radius: 60
+            border_width: 0
+            pad_all: 0
+
+        - button:
+            id: btn_back_home
+            width: 200
+            height: 70
+            align: BOTTOM_MID
+            y: -20
+            bg_color: 0x30363D
+            radius: 35
+            widgets:
+              - label:
+                  text: "Retour"
+                  text_color: 0xFFFFFF
+                  text_font: montserrat_22
+                  align: CENTER
+            on_click:
+              - lvgl.page.show:
+                  id: page_home
+                  animation: MOVE_RIGHT
+                  time: 250ms
+
+# =============================================================================
+# LE VISAGE KAWAII
+# =============================================================================
+# parent_id accepte l'id d'un widget (ici face_panel) ou directement l'id d'une
+# page. Le visage est créé DANS ce widget — plus jamais sur la page affichée au
+# démarrage.
+lvgl_kawaii_face:
+  id: face
+  parent_id: face_panel
+  initial_emotion: neutral
+  animation_speed: 30ms
+  blink_interval: 3000ms
+  auto_blink: true
+  smooth: true
+  response_fallback: speaking
+  # Optionnel : la couleur est déduite du fond de la page si on l'omet.
+  # bg_color: ${background_color}
