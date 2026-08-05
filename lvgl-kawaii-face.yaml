@@ -129,11 +129,34 @@ esphome:
       - esp_cam_sensor.start_streaming:
           id: tab5_cam
       - delay: 500ms
-      # État caméra : si l'image est encore 0x0 ici, inutile de chercher plus
-      # loin, la détection ne verra jamais rien.
+      # État caméra + FORMAT RÉEL des pixels. face_detection passe le buffer
+      # à esp-dl en DL_IMAGE_PIX_TYPE_RGB565 : si la caméra délivre du JPEG,
+      # l'inférence analyse des octets compressés et ne trouvera jamais rien.
+      # Un JPEG commence par FF D8 FF ; du RGB565 brut, non. Cette sonde
+      # tranche, là où « 0 visage » ne dit pas pourquoi.
       - lambda: |-
-          ESP_LOGI("kawaii.follow", "caméra au boot : %dx%d",
-                   id(tab5_cam).get_image_width(), id(tab5_cam).get_image_height());
+          const char *T = "kawaii.follow";
+          int w = id(tab5_cam).get_image_width();
+          int h = id(tab5_cam).get_image_height();
+          ESP_LOGI(T, "caméra au boot : %dx%d", w, h);
+
+          auto *buf = id(tab5_cam).acquire_buffer();
+          if (buf == nullptr) {
+            ESP_LOGW(T, "aucun buffer disponible — le flux ne tourne pas encore");
+          } else {
+            uint8_t *d = id(tab5_cam).get_buffer_data(buf);
+            if (d == nullptr) {
+              ESP_LOGW(T, "buffer sans données");
+            } else {
+              ESP_LOGI(T, "premiers octets : %02X %02X %02X %02X", d[0], d[1], d[2], d[3]);
+              if (d[0] == 0xFF && d[1] == 0xD8)
+                ESP_LOGE(T, "-> JPEG. La détection ne verra JAMAIS de visage. "
+                            "Mets pixel_format: RGB565 dans esp_cam_sensor.");
+              else
+                ESP_LOGI(T, "-> pixels bruts : format compatible avec esp-dl.");
+            }
+            id(tab5_cam).release_buffer(buf);
+          }
 
 
 
