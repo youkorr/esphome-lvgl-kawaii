@@ -122,8 +122,15 @@ esphome:
       - delay: 5s
       - logger.log: "Délai écoulé - Allumage du rétroéclairage"
       - light.turn_on: backlight
-      # État caméra au démarrage : si l'image est 0x0 ici, inutile de chercher
-      # plus loin, la détection ne verra jamais rien.
+      # Démarrer le flux vidéo. Indispensable : face_detection attend le flux
+      # mais ne le lance pas (if (!camera_->is_streaming()) return;), et les
+      # dimensions de l'image ne sont renseignées qu'une fois le flux actif —
+      # d'où le "image 0x0" tant que personne ne l'a démarré.
+      - esp_cam_sensor.start_streaming:
+          id: tab5_cam
+      - delay: 500ms
+      # État caméra : si l'image est encore 0x0 ici, inutile de chercher plus
+      # loin, la détection ne verra jamais rien.
       - lambda: |-
           ESP_LOGI("kawaii.follow", "caméra au boot : %dx%d",
                    id(tab5_cam).get_image_width(), id(tab5_cam).get_image_height());
@@ -859,8 +866,14 @@ esp_cam_sensor:
   id: tab5_cam
   i2c_id: bsp_bus
   sensor_type: ov5647
-  resolution: "1280x960"
-  framerate: 30
+  # 640x480 en RGB565, pas 1280x960 en JPEG :
+  #  - face_detection lit les pixels BRUTS (dl::image DL_IMAGE_PIX_TYPE_RGB565).
+  #    En JPEG il analyserait des octets compressés, donc jamais de visage.
+  #  - esp-dl tourne sur CPU (le P4 n'a pas de NPU) : 640x480 suffit largement
+  #    pour repérer un visage à portée de voix, et coûte 4x moins qu'en 1280x960.
+  pixel_format: RGB565
+  resolution: "640x480"
+  framerate: 15
   jpeg_quality: 15
   mirror_x: false
   mirror_y: false
