@@ -37,19 +37,41 @@ external_components:
     components: [face_detection]
     refresh: 0s
 
-# --- Caméra + détection (adapte à ta carte) ---------------------------------
-# esp_cam_sensor:
-#   - platform: mipi_csi
-#     id: cam
-#     ...
-#
-# face_detection:
-#   id: face_detect
-#   camera_id: cam
-#   score_threshold: 0.5
-#   detection_interval: 3      # 1 image sur 3 : suffisant pour suivre, et
-#                              # ça laisse du CPU au reste (le P4 n'a pas de NPU)
-#   draw_enabled: false        # pas besoin d'afficher les boîtes
+# --- Caméra + détection ------------------------------------------------------
+# Config Waveshare/M5 ESP32-P4 + OV5647. Adapte i2c_id/pins à ta carte.
+esp_video:
+  i2c_id: bsp_bus
+  xclk_pin: GPIO36
+  xclk_freq: 24000000
+  enable_jpeg: true
+  enable_isp: true
+  use_heap_allocator: false
+
+esp_cam_sensor:
+  id: tab5_cam
+  i2c_id: bsp_bus
+  sensor_type: ov5647
+  resolution: "1280x960"
+  framerate: 30
+  jpeg_quality: 15
+  mirror_x: false
+  mirror_y: false
+  rotation: 0
+  crop_offset_x: 0
+
+face_detection:
+  id: face_detect
+  camera_id: tab5_cam
+  # face_recognition est le seul modèle « visage » ; les autres valeurs
+  # acceptées sont yolo11 et pose_detection. La reconnaissance elle-même
+  # reste désactivée par défaut : le suivi n'a besoin que des coordonnées.
+  model_type: face_recognition
+  score_threshold: 0.3
+  nms_threshold: 0.5
+  # 1 image sur 5 : le P4 n'a pas de NPU, esp-dl tourne sur CPU. Largement
+  # assez réactif pour un regard, et ça laisse le CPU à LVGL.
+  detection_interval: 5
+  draw_enabled: false        # on ne montre pas la caméra, rien à dessiner
 
 globals:
   # Dernière fois qu'un visage a été vu, pour savoir quand lâcher le regard.
@@ -78,8 +100,8 @@ interval:
           }
 
           // Coordonnées image -> -100..100 attendus par look_at.
-          int iw = id(cam).get_image_width();
-          int ih = id(cam).get_image_height();
+          int iw = id(tab5_cam).get_image_width();
+          int ih = id(tab5_cam).get_image_height();
           if (iw <= 0 || ih <= 0)
             return;
 
