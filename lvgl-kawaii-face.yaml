@@ -1100,11 +1100,11 @@ time:
         minutes: 0
         then:
           # La nuit, on coupe la vie autonome : le visage dort vraiment.
-          - lambda: id(idle_life).stop();
+          - lambda: id(idle_life).stop_poller();
       - hours: 7
         minutes: 1
         then:
-          - lambda: id(idle_life).start();
+          - lambda: id(idle_life).start_poller();
 
 # =============================================================================
 # RÉACTIONS À LA MAISON
