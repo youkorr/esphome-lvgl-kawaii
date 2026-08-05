@@ -704,6 +704,22 @@ interval:
                 emotion: !lambda return id(idle_emotion);
 
   # ---------------------------------------------------------------------
+  # POMPE VIDÉO — sans elle, rien ne détecte.
+  # capture_frame() est la SEULE fonction qui déqueue une image V4L2 et
+  # renseigne current_buffer_index_. Le loop() de la caméra ne fait que des
+  # contrôles de santé ; le seul appelant dans tout le dépôt est
+  # lvgl_camera_display, que nous n'utilisons pas puisqu'on n'affiche pas la
+  # caméra. Sans lui : current_buffer_index_ reste à -1, acquire_buffer()
+  # rend nullptr, et face_detection::process_frame_() ressort aussitôt —
+  # zéro détection, indéfiniment.
+  # Le fd V4L2 est ouvert en O_NONBLOCK et la fonction rend false sur EAGAIN,
+  # donc aucun risque de bloquer la boucle principale.
+  # ---------------------------------------------------------------------
+  - interval: 66ms
+    then:
+      - lambda: id(tab5_cam).capture_frame();
+
+  # ---------------------------------------------------------------------
   # SUIVI DU REGARD : les yeux se posent sur la personne vue par la caméra.
   # 10 Hz — assez fluide pour paraître vivant, assez lent pour ne rien coûter.
   # La détection tourne à son propre rythme (detection_interval) de son côté.
@@ -808,6 +824,9 @@ interval:
   # Se tait dès qu'un visage est suivi par la caméra, sinon il tirerait les
   # yeux au hasard toutes les 2,5 s en pleine poursuite.
   - interval: 2500ms
+    # Laisse le visage s'initialiser : sinon le premier tirage part avant et
+    # look_at() le refuse en journalisant un avertissement au démarrage.
+    startup_delay: 15s
     then:
       - if:
           condition:
