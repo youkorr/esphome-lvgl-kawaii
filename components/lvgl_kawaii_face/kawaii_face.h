@@ -200,8 +200,13 @@ class KawaiiFaceComponent : public Component {
   // to wandering when the person leaves.
   void look_at(int x, int y, uint32_t hold_ms) {
 #ifdef USE_LVGL
-    if (!this->initialized_)
+    if (!this->initialized_) {
+      // Worth saying out loud: a tracker feeding a face that is not up yet
+      // looks exactly like a tracker that is not working.
+      ESP_LOGW(TAG, "look_at(%d, %d) ignoré : le visage n'est pas encore initialisé", x, y);
       return;
+    }
+    ESP_LOGV(TAG, "regard -> (%d, %d) pendant %ums", x, y, (unsigned) hold_ms);
     face_set_gaze((int8_t) clamp(x, -100, 100), (int8_t) clamp(y, -100, 100), hold_ms);
 #endif
   }

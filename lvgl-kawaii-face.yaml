@@ -122,6 +122,11 @@ esphome:
       - delay: 5s
       - logger.log: "Délai écoulé - Allumage du rétroéclairage"
       - light.turn_on: backlight
+      # État caméra au démarrage : si l'image est 0x0 ici, inutile de chercher
+      # plus loin, la détection ne verra jamais rien.
+      - lambda: |-
+          ESP_LOGI("kawaii.follow", "caméra au boot : %dx%d",
+                   id(tab5_cam).get_image_width(), id(tab5_cam).get_image_height());
 
 
 
@@ -676,9 +681,34 @@ interval:
   - interval: 100ms
     then:
       - lambda: |-
+          static const char *const TAG = "kawaii.follow";
+          static bool had_face = false;
+          static uint32_t last_log = 0;
+
+          // Journalisation détaillée seulement quand l'interrupteur « Debug
+          // suivi caméra » est armé, et à 2 Hz : à 10 Hz ça noierait le log.
+          const bool dbg = id(cam_debug_switch).state;
+          const bool log_now = dbg && (millis() - last_log > 500);
+
+          int iw = id(tab5_cam).get_image_width();
+          int ih = id(tab5_cam).get_image_height();
+
           auto faces = id(face_detect).get_detected_faces();
-          if (faces.empty())
+          if (faces.empty()) {
+            if (had_face) {
+              ESP_LOGI(TAG, "visage PERDU");
+              had_face = false;
+            }
+            if (log_now) {
+              last_log = millis();
+              // Si l'image est 0x0, c'est la caméra qui ne fournit rien —
+              // pas la détection qui échoue. Les deux se confondraient sinon.
+              ESP_LOGI(TAG, "0 visage | image %dx%d %s", iw, ih,
+                       (iw <= 0 || ih <= 0) ? "<- CAMERA MUETTE" : "");
+            }
+            id(dbg_faces) = 0;
             return;
+          }
 
           // Le plus grand visage = la personne la plus proche. C'est elle
           // qu'on regarde, plutôt que de loucher entre deux personnes.
@@ -689,10 +719,14 @@ interval:
             if (area > best_area) { best_area = area; best = &f; }
           }
 
-          int iw = id(tab5_cam).get_image_width();
-          int ih = id(tab5_cam).get_image_height();
-          if (iw <= 0 || ih <= 0)
+          if (iw <= 0 || ih <= 0) {
+            if (log_now) {
+              last_log = millis();
+              ESP_LOGW(TAG, "%d visage(s) mais image %dx%d : dimensions invalides",
+                       (int) faces.size(), iw, ih);
+            }
             return;
+          }
 
           int cx = (best->x1 + best->x2) / 2;
           int cy = (best->y1 + best->y2) / 2;
@@ -701,6 +735,7 @@ interval:
 
           // La caméra te fait face : ce qu'elle voit à sa droite est à ta
           // gauche. On inverse X pour que le visage te regarde VRAIMENT.
+          // Si les yeux partent à l'inverse de toi, retire cette ligne.
           gx = -gx;
 
           // Lissage : sans ça les yeux sautent sur chaque détection bruitée.
@@ -708,11 +743,24 @@ interval:
           sx = (sx * 2 + gx) / 3;
           sy = (sy * 2 + gy) / 3;
 
+          if (!had_face) {
+            ESP_LOGI(TAG, "visage ACQUIS (score %.2f)", best->score);
+            had_face = true;
+          }
+          if (log_now) {
+            last_log = millis();
+            ESP_LOGI(TAG,
+                     "%d visage(s) | boite (%d,%d)-(%d,%d) score %.2f | image %dx%d"
+                     " | centre (%d,%d) -> brut (%d,%d) -> lisse (%d,%d)",
+                     (int) faces.size(), best->x1, best->y1, best->x2, best->y2,
+                     best->score, iw, ih, cx, cy, gx, gy, sx, sy / 2);
+          }
+
           id(last_face_seen) = millis();
           id(last_interaction) = millis();     // vu quelqu'un = pas endormi
           id(face).look_at(sx, sy / 2, 1500);  // Y atténué : moins de roulis
 
-          // Pour le bandeau de diagnostic (bouton « Debug caméra »).
+          // Pour le bandeau de diagnostic (bouton « Debug suivi caméra »).
           id(dbg_faces) = faces.size();
           id(dbg_gx) = sx;
           id(dbg_gy) = sy / 2;
