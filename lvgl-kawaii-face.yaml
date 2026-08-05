@@ -728,6 +728,8 @@ interval:
     then:
       - lambda: |-
           static const char *const TAG = "kawaii.follow";
+          // Délai de grâce avant de considérer la personne partie.
+          static const uint32_t FOLLOW_GRACE_MS = 2500;
           static bool had_face = false;
           static uint32_t last_log = 0;
 
@@ -741,16 +743,24 @@ interval:
 
           auto faces = id(face_detect).get_detected_faces();
           if (faces.empty()) {
-            if (had_face) {
-              ESP_LOGI(TAG, "visage PERDU");
+            // Hystérésis. L'inférence tourne à ~1-3 Hz (detection_interval
+            // compte les tours de boucle ESPHome, et LVGL en prend ~70ms),
+            // et un simple mouvement de tête suffit à la faire échouer une
+            // fois. Lâcher le suivi au premier vide rendait le regard
+            // sautillant. On garde la dernière position pendant la grâce.
+            uint32_t since = id(last_face_seen) ? (millis() - id(last_face_seen)) : 999999;
+            if (had_face && since <= FOLLOW_GRACE_MS) {
+              id(face).look_at(id(dbg_gx), id(dbg_gy), 2500);
+            } else if (had_face) {
+              ESP_LOGI(TAG, "visage PERDU (%u ms sans détection)", (unsigned) since);
               had_face = false;
             }
             if (log_now) {
               last_log = millis();
               // Si l'image est 0x0, c'est la caméra qui ne fournit rien —
               // pas la détection qui échoue. Les deux se confondraient sinon.
-              ESP_LOGI(TAG, "0 visage | image %dx%d %s", iw, ih,
-                       (iw <= 0 || ih <= 0) ? "<- CAMERA MUETTE" : "");
+              ESP_LOGI(TAG, "0 visage | image %dx%d | dernier il y a %u ms %s", iw, ih,
+                       (unsigned) since, (iw <= 0 || ih <= 0) ? "<- CAMERA MUETTE" : "");
             }
             id(dbg_faces) = 0;
             return;
@@ -804,7 +814,7 @@ interval:
 
           id(last_face_seen) = millis();
           id(last_interaction) = millis();     // vu quelqu'un = pas endormi
-          id(face).look_at(sx, sy / 2, 1500);  // Y atténué : moins de roulis
+          id(face).look_at(sx, sy / 2, 2500);  // Y atténué : moins de roulis
 
           // Pour le bandeau de diagnostic (bouton « Debug suivi caméra »).
           id(dbg_faces) = faces.size();
