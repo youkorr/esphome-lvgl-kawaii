@@ -541,6 +541,19 @@ globals:
   - id: idle_emotion
     type: std::string
     restore_value: false
+  # Diagnostic du suivi (affiché par le bandeau de debug).
+  - id: dbg_faces
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: dbg_gx
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: dbg_gy
+    type: int
+    restore_value: false
+    initial_value: '0'
   # Dernière fois qu'un visage a été vu par la caméra.
   - id: last_face_seen
     type: uint32_t
@@ -559,6 +572,18 @@ switch:
   # Fait défiler les 17 expressions, comme examples/basic_cycle du dépôt
   # d'origine. Sert à juger le rendu sans déclencher l'assistant vocal.
   # Coupe-le pour laisser le voice assistant piloter le visage.
+  # Affiche le bandeau vert de diagnostic du suivi caméra sur la page du
+  # visage. À couper une fois le réglage terminé.
+  - platform: template
+    name: "Debug suivi caméra"
+    id: cam_debug_switch
+    optimistic: true
+    restore_mode: ALWAYS_OFF
+    turn_off_action:
+      - lvgl.label.update:
+          id: cam_debug
+          text: ""
+
   - platform: template
     name: "Démo expressions du visage"
     id: face_demo
@@ -570,6 +595,22 @@ switch:
           text: ""
 
 interval:
+  # Bandeau de diagnostic du suivi caméra (5 Hz), seulement quand demandé.
+  - interval: 200ms
+    then:
+      - if:
+          condition:
+            switch.is_on: cam_debug_switch
+          then:
+            - lvgl.label.update:
+                id: cam_debug
+                text: !lambda |-
+                  char buf[64];
+                  uint32_t age = id(last_face_seen) ? (millis() - id(last_face_seen)) : 99999;
+                  snprintf(buf, sizeof(buf), "visages:%d  regard:%d,%d  vu il y a %ums",
+                           id(dbg_faces), id(dbg_gx), id(dbg_gy), (unsigned) age);
+                  return std::string(buf);
+
   # 2500 ms = HOLD_MS de l'exemple upstream.
   - interval: 2500ms
     then:
@@ -671,6 +712,11 @@ interval:
           id(last_interaction) = millis();     // vu quelqu'un = pas endormi
           id(face).look_at(sx, sy / 2, 1500);  // Y atténué : moins de roulis
 
+          // Pour le bandeau de diagnostic (bouton « Debug caméra »).
+          id(dbg_faces) = faces.size();
+          id(dbg_gx) = sx;
+          id(dbg_gy) = sy / 2;
+
   # Plus personne depuis 10 s -> le visage se désintéresse.
   - interval: 2s
     then:
@@ -681,11 +727,15 @@ interval:
             - lambda: id(last_face_seen) = 0;
 
   # Regard vagabond : les yeux balaient la pièce entre deux expressions.
+  # Se tait dès qu'un visage est suivi par la caméra, sinon il tirerait les
+  # yeux au hasard toutes les 2,5 s en pleine poursuite.
   - interval: 2500ms
     then:
       - if:
           condition:
-            - lambda: 'return !id(va_busy) && !id(face_demo).state;'
+            - lambda: |-
+                return !id(va_busy) && !id(face_demo).state &&
+                       (id(last_face_seen) == 0 || (millis() - id(last_face_seen)) > 3000);
           then:
             - lvgl_kawaii_face.look_at:
                 id: face
@@ -891,6 +941,17 @@ lvgl:
                   border_width: 0
                   pad_all: 0
                   scrollable: false
+
+              # Bandeau de diagnostic du suivi caméra. Affiche le nombre de
+              # visages vus et la direction du regard envoyée. Vide tant que
+              # le debug est coupé.
+              - label:
+                  id: cam_debug
+                  text: ""
+                  text_color: 0x30D158
+                  text_font: montserrat_18
+                  align: TOP_MID
+                  y: 12
 
               # Légende de l'émotion, dans le cadre comme dans le GIF.
               - label:
