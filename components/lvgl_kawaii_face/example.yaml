@@ -39,9 +39,18 @@ external_components:
 # --- 2. Panneau LVGL qui accueille le visage ---
 # Le visage remplit automatiquement ce panneau et se met à l'échelle.
 # Donnez-lui la taille/position voulues ; fond transparent, sans bordure.
+# Le visage peut être sur n'importe quelle page, pas seulement la première.
 lvgl:
   pages:
+    - id: page_home
+      widgets:
+        - label:
+            text: "Page 1"
+            align: CENTER
+
     - id: page_face
+      # Sert de fond au visage (les canvas des yeux/bouche sont opaques).
+      bg_color: 0x101820
       widgets:
         - obj:
             id: face_panel
@@ -53,7 +62,9 @@ lvgl:
             pad_all: 0
 
 # --- 3. Le composant kawaii face ---
-# parent_id  : l'id du widget LVGL ci-dessus (omettez-le pour remplir l'écran)
+# parent_id  : id du widget LVGL ci-dessus — ou d'une page (page_face) pour
+#              remplir toute la page. Omettez-le pour remplir l'écran actif.
+# bg_color   : optionnel, repris du fond de la page si absent
 # smooth     : true = transitions douces entre expressions
 lvgl_kawaii_face:
   id: face

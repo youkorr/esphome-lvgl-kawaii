@@ -58,9 +58,12 @@ external_components:
 #             pad_all: 0
 
 # --- 4. Le composant kawaii face --------------------------------------------
+# parent_id peut viser un widget OU une page, et fonctionne quelle que soit la
+# position de ce bloc dans le YAML : le visage n'atterrit plus sur la page
+# affichée au démarrage.
 lvgl_kawaii_face:
   id: face
-  parent_id: face_panel       # l'id du widget obj ci-dessus
+  parent_id: face_panel       # l'id du widget obj ci-dessus (ou page_assistant)
   initial_emotion: neutral
   animation_speed: 30ms
   blink_interval: 3000ms
@@ -96,6 +99,10 @@ lvgl_kawaii_face:
 
 # --- Note mémoire -----------------------------------------------------------
 # Les buffers de canvas du visage (~quelques dizaines de Ko à 320px) sont
-# alloués en RAM interne en priorité, puis PSRAM en repli — les deux sont
+# alloués en PSRAM en priorité, puis en RAM interne en repli — les deux sont
 # accessibles par PPA et gérés en cache. Augmente la taille du panneau si tu
-# veux un plus grand visage (la PSRAM prend le relais).
+# veux un plus grand visage.
+#
+# Quand la page du visage n'est pas affichée, les canvas ne sont plus redessinés
+# (l'animation continue en interne) : un visage sur une page cachée ne coûte
+# plus de bande passante d'affichage.

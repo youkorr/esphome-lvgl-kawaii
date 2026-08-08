@@ -1,7 +1,7 @@
 # lvgl_kawaii_face (ESPHome)
 
-ESPHome wrapper around the [lvgl_kawaii_face](../../lvgl_kawaii_face-main) C
-component — an animated kawaii face for LVGL 9. It draws eyes, eyebrows, blush
+ESPHome wrapper around [0015/lvgl_kawaii_face](https://github.com/0015/lvgl_kawaii_face)
+by Eric Nam (MIT) — an animated kawaii face for LVGL 9. It draws eyes, eyebrows, blush
 and a mouth on LVGL canvases with per-emotion animations, and exposes the
 emotion as an ESPHome **action** so the face can react to your automations,
 most notably the **voice assistant** pipeline.
@@ -22,6 +22,7 @@ external_components:
 lvgl:
   pages:
     - id: page_face
+      bg_color: 0x101820        # also used as the face's background
       widgets:
         - obj:
             id: face_panel
@@ -34,7 +35,7 @@ lvgl:
 
 lvgl_kawaii_face:
   id: face
-  parent_id: face_panel       # optional; omit to fill the active screen
+  parent_id: face_panel       # widget id, page id, or omit to fill the screen
   initial_emotion: neutral
   animation_speed: 30ms       # timer interval (~33 FPS)
   blink_interval: 3000ms
@@ -44,7 +45,8 @@ lvgl_kawaii_face:
 
 | Option | Default | Description |
 |---|---|---|
-| `parent_id` | *(screen)* | id of an LVGL widget the face fills. Omit to use the active screen. |
+| `parent_id` | *(active screen)* | id of the LVGL widget **or page** the face fills. Validated against the ids declared under `lvgl:`. Omit to use the active screen. |
+| `bg_color` | *(inherited)* | Colour the face canvases are cleared with. Defaults to the background of the first opaque ancestor (the panel, else the page). |
 | `animation_speed` | `30ms` | Animation update interval. |
 | `blink_interval` | `3000ms` | Auto-blink period. |
 | `auto_blink` | `true` | Enable automatic blinking. |
@@ -54,6 +56,72 @@ lvgl_kawaii_face:
 | `response_fallback` | `speaking` | Expression used when a response matches no keyword. |
 
 > The C component is a singleton — configure a single `lvgl_kawaii_face:` block.
+
+### Putting the face on a page other than the first
+
+`parent_id` is honoured whatever the order of the YAML blocks. Up to and
+including the previous release the id was read while the generated `setup()`
+declared it — before the `lvgl:` component had assigned it — so the face got a
+null parent and fell back to `lv_screen_active()`: it always appeared on the
+page showing at boot, never on the configured one. The id is now resolved at
+initialisation time instead, so this works:
+
+```yaml
+lvgl:
+  pages:
+    - id: page_home          # page 1, no face here
+      widgets: [...]
+    - id: page_face          # page 2
+      widgets:
+        - obj:
+            id: face_panel
+            width: 520
+            height: 520
+            align: CENTER
+            bg_opa: TRANSP
+
+lvgl_kawaii_face:
+  id: face
+  parent_id: face_panel      # or `page_face` to fill the whole page
+```
+
+The face size follows the parent: it is `min(width, height)` of the parent
+object, centred in it. A parent with no size yet is retried for a few seconds,
+then reported as an error instead of silently rendering nowhere.
+
+### Size
+
+The face is `min(width, height)` of `parent_id`, centred in it — so you size
+the face by sizing the parent object. Any size works: the drawing constants
+(corner radii, outline widths, blush, sparkles) are scaled from the upstream
+reference panel of 135×135, so proportions hold. Left absolute, a 340px face
+had 15px-radius eyes — nearly square — with hairline brows and dot-sized
+blush.
+
+### Background colour and palette
+
+The eyes and mouth are drawn on opaque LVGL canvases, so they have to be
+cleared with the colour behind them or the face shows up as three rectangles.
+By default the component walks up from `parent_id` and takes the first
+ancestor with an opaque background — give your page a `bg_color`, leave the
+panel `bg_opa: TRANSP`, and it just works. Set `bg_color:` to override it.
+
+That colour also selects the stroke palette, because the eyebrows and the
+closed-eye line would otherwise be drawn in near-black:
+
+| Background | Eyebrows / closed eye | Outline around the eye white |
+|---|---|---|
+| light | dark brown | 3 px black |
+| dark | grey-blue | none |
+
+So the face reads on a dark panel (the demo GIF's look) as well as a light
+one, with no configuration.
+
+> `docs/kawaii_face_demo.gif` is a **stylised Pillow mock-up, not a screen
+> capture** — see the header of `docs/make_demo_gif.py`. It illustrates the
+> palette and the emotion cycle; the on-device rendering is close in spirit
+> but not pixel-identical (the component draws into three canvases, so every
+> element lives inside an eye or mouth rectangle).
 
 ## Action: `lvgl_kawaii_face.set_emotion`
 
@@ -71,6 +139,39 @@ lvgl_kawaii_face:
 
 Voice-assistant friendly aliases: `idle`→neutral, `listening`→surprised,
 `thinking`→working_hard, `speaking`/`talking`→happy, `error`→sad.
+
+## Action: `lvgl_kawaii_face.set_talking`
+
+Animates the mouth as if speaking, overriding whatever shape the current
+expression draws — the eyes, brows and cheeks carry on, so the face stays
+"happy while talking". Wire it to the assistant's speech:
+
+```yaml
+voice_assistant:
+  on_tts_start:
+    - lvgl_kawaii_face.set_talking: true
+  on_tts_end:
+    - lvgl_kawaii_face.set_talking: false
+```
+
+## Action: `lvgl_kawaii_face.look_at`
+
+Points the eyes somewhere: `x` and `y` run -100..100, `(0, 0)` straight ahead.
+The gaze releases itself after `hold`, so the eyes go back to their own
+wandering when whatever they were following goes away.
+
+```yaml
+- lvgl_kawaii_face.look_at:
+    id: face
+    x: !lambda return -60;   # templatable
+    y: 0
+    hold: 2s
+```
+
+Both values are templatable, so the gaze can be driven by anything — a
+touchscreen, a presence sensor, or a camera. See
+[`example_face_follow_camera.yaml`](example_face_follow_camera.yaml) for the
+face following a person detected by an ESP32-P4 camera.
 
 ## Action: `lvgl_kawaii_face.set_emotion_from_text`
 
@@ -143,6 +244,9 @@ See [`example_esp32p4_waveshare.yaml`](example_esp32p4_waveshare.yaml) for a
 board-specific snippet (1024×600, rotation 180, `okay_nabu`) to merge into your
 existing config.
 
-Canvas buffers (tens of KB) are allocated in internal RAM first, then PSRAM —
-both PPA-accessible. Increase `face_panel` size for a larger face (PSRAM takes
-over).
+Canvas buffers (tens of KB) are allocated in PSRAM first, then internal RAM —
+both PPA-accessible. Increase `face_panel` size for a larger face.
+
+The animation timer keeps running when the face's page is hidden, but the
+canvases are not redrawn while it is off-screen — an idle face on page 2 costs
+no display bandwidth, and it is refreshed as soon as its page is shown again.

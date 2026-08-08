@@ -5,6 +5,7 @@
 
 #include "lvgl_kawaii_face.h"
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 
 #ifdef ESP_PLATFORM
@@ -90,6 +91,11 @@ static const char *TAG = "face_anim";
 #define DEFAULT_ANIM_SPEED_MS 30
 #define DEFAULT_BLINK_INTERVAL 3000
 
+/* Lower bounds. A 0ms timer period runs the callback on every LVGL tick and
+ * starves the rest of the UI; a 0ms blink interval blinks non-stop. */
+#define MIN_ANIM_SPEED_MS 5
+#define MIN_BLINK_INTERVAL 200
+
 typedef struct
 {
     lv_obj_t *left_eye_canvas;
@@ -133,6 +139,29 @@ typedef struct
     uint16_t mouth_cw;
     uint16_t mouth_ch;
 
+    /* Speaking animation: overrides the mouth while the assistant talks. */
+    bool talking;
+    uint8_t talk_phase;
+
+    /* Directed gaze, overriding the idle pupil drift until gaze_until. */
+    bool gaze_active;
+    int8_t gaze_x;
+    int8_t gaze_y;
+    uint32_t gaze_until;
+
+    lv_color_t bg_color;
+    /* Strokes that would otherwise be drawn in near-black: the eyebrows and
+     * the closed-eye line. Picked from the background so the face reads on a
+     * dark panel as well as a light one. */
+    lv_color_t line_color;
+    uint8_t line_width;
+    /* The outline around the white of the eye. Zero on a dark background,
+     * where a black ring is invisible anyway (and the demo GIF has none). */
+    uint8_t eye_border_width;
+    /* Set when a redraw was skipped because the face was off-screen, so the
+     * canvases are refreshed as soon as its page is shown again. */
+    bool redraw_pending;
+
     lv_timer_t *anim_timer;
     bool initialized;
 } face_state_t;
@@ -140,10 +169,110 @@ typedef struct
 static face_state_t face_state = {0};
 
 static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left);
+/* LVGL has no curve primitive, so stroke a quadratic bezier as a polyline —
+ * the shape the demo GIF draws with PIL (docs/make_demo_gif.py: draw_mouth).
+ * depth > 0 dips the middle down (a smile), depth < 0 lifts it (a frown).
+ * The filled rounded rect this replaces could not express either: every
+ * expression got the same flat slab, only shifted vertically. */
+static void draw_mouth_curve(lv_layer_t *layer, int16_t cx, int16_t cy,
+                             int16_t half_w, int16_t depth, int16_t thickness)
+{
+    if (thickness < 2)
+        thickness = 2;
+
+    lv_draw_line_dsc_t dsc;
+    lv_draw_line_dsc_init(&dsc);
+    dsc.color = lv_color_make(210, 70, 95);   /* GIF: MOUTH */
+    dsc.width = thickness;
+    dsc.opa = LV_OPA_COVER;
+    dsc.round_start = 1;
+    dsc.round_end = 1;
+
+    const float x0 = cx - half_w, y0 = cy - depth * 0.4f;
+    const float x1 = cx,          y1 = cy + depth;
+    const float x2 = cx + half_w, y2 = cy + depth * 0.4f;
+
+    float px = x0, py = y0;
+    for (int i = 1; i <= 16; i++)
+    {
+        float t = (float) i / 16.0f;
+        float mt = 1.0f - t;
+        float x = mt * mt * x0 + 2.0f * mt * t * x1 + t * t * x2;
+        float y = mt * mt * y0 + 2.0f * mt * t * y1 + t * t * y2;
+        dsc.p1.x = (int32_t) px;
+        dsc.p1.y = (int32_t) py;
+        dsc.p2.x = (int32_t) x;
+        dsc.p2.y = (int32_t) y;
+        lv_draw_line(layer, &dsc);
+        px = x;
+        py = y;
+    }
+}
+
 static void draw_mouth(lv_obj_t *canvas, int8_t curve);
 static void update_emotion_parameters(face_emotion_t emotion, uint8_t *left_eye, uint8_t *right_eye, int8_t *mouth,
                                       int8_t *left_brow, int8_t *right_brow, int8_t *brow_height);
 static void animation_timer_cb(lv_timer_t *timer);
+
+/* The eye/mouth canvases are opaque, so they have to be cleared with the
+ * colour of whatever sits behind them or the face renders as three boxes.
+ * Walk up from the parent to the screen and take the first background that is
+ * actually painted; a fully transparent panel contributes nothing visually. */
+static lv_color_t face_resolve_bg_color(lv_obj_t *parent)
+{
+    for (lv_obj_t *obj = parent; obj != NULL; obj = lv_obj_get_parent(obj))
+    {
+        if (lv_obj_get_style_bg_opa(obj, LV_PART_MAIN) >= LV_OPA_50)
+            return lv_obj_get_style_bg_color(obj, LV_PART_MAIN);
+    }
+    return lv_color_white();
+}
+
+/* The pixel constants in draw_eye()/draw_mouth() — corner radii, border
+ * widths, blush size, sparkle size — are tuned for the upstream reference
+ * panel of 135x135 (see the project README's lv_obj_set_size(face_panel,
+ * 135, 135)). They are absolute, so on a larger panel the eyes turned into
+ * near-square boxes with hairline outlines instead of scaling up. fs()
+ * rescales them; it is the identity at the reference size. */
+#define FACE_REF_SZ 135
+static inline int16_t fs(int v)
+{
+    int32_t r = ((int32_t) v * (int32_t) face_state.face_sz) / FACE_REF_SZ;
+    if (v > 0 && r < 1)
+        r = 1;
+    return (int16_t) r;
+}
+
+/* Rec. 601 luma — cheap, and enough to decide which palette reads better. */
+static bool face_bg_is_dark(lv_color_t c)
+{
+    uint16_t luma = (uint16_t)((c.red * 77 + c.green * 151 + c.blue * 28) >> 8);
+    return luma < 128;
+}
+
+/* Release everything face_animation_init() may have created so far. Callers
+ * retry initialisation (the parent may not be laid out yet, PSRAM may not be
+ * free yet), and without this every attempt leaked a container plus up to
+ * three canvas buffers. */
+static void face_init_cleanup(void)
+{
+    if (face_state.face_container)
+    {
+        /* Deleting the container also deletes the canvases parented to it. */
+        lv_obj_del(face_state.face_container);
+        face_state.face_container = NULL;
+    }
+    face_state.left_eye_canvas = NULL;
+    face_state.right_eye_canvas = NULL;
+    face_state.mouth_canvas = NULL;
+
+    free(face_state.left_eye_buf);
+    free(face_state.right_eye_buf);
+    free(face_state.mouth_buf);
+    face_state.left_eye_buf = NULL;
+    face_state.right_eye_buf = NULL;
+    face_state.mouth_buf = NULL;
+}
 
 esp_err_t face_animation_init(face_config_t *config)
 {
@@ -165,19 +294,65 @@ esp_err_t face_animation_init(face_config_t *config)
         face_state.config.animation_speed = DEFAULT_ANIM_SPEED_MS;
         face_state.config.blink_interval = DEFAULT_BLINK_INTERVAL;
         face_state.config.auto_blink = true;
+        face_state.config.bg_color_set = false;
     }
+
+    if (face_state.config.animation_speed < MIN_ANIM_SPEED_MS)
+        face_state.config.animation_speed = MIN_ANIM_SPEED_MS;
+    if (face_state.config.blink_interval < MIN_BLINK_INTERVAL)
+        face_state.config.blink_interval = MIN_BLINK_INTERVAL;
 
     lv_obj_t *parent_obj = (face_state.config.parent != NULL)
                                ? face_state.config.parent
                                : lv_scr_act();
+    if (parent_obj == NULL)
+    {
+        FACE_LOGE(TAG, "No parent object and no active screen");
+        face_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+
     lv_obj_update_layout(parent_obj);
     int32_t parent_w = lv_obj_get_width(parent_obj);
     int32_t parent_h = lv_obj_get_height(parent_obj);
+    /* A parent that has not been laid out yet reports 0 (or a negative size
+     * for a not-yet-resolved percentage). Bail out instead of creating
+     * zero-sized canvases: lv_canvas_set_buffer() would then index a buffer
+     * that malloc(0) never really allocated. The caller retries. */
+    if (parent_w <= 0 || parent_h <= 0)
+    {
+        FACE_LOGW(TAG, "Parent has no size yet (%dx%d), deferring init", parent_w, parent_h);
+        face_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+
     uint16_t face_sz = (uint16_t)((parent_w < parent_h) ? parent_w : parent_h);
 
+    face_state.bg_color = face_state.config.bg_color_set
+                              ? face_state.config.bg_color
+                              : face_resolve_bg_color(parent_obj);
+
+    /* Must precede any fs() call — it scales against this. */
     face_state.face_sz = face_sz;
+
+    if (face_bg_is_dark(face_state.bg_color))
+    {
+        /* Values from the demo GIF's dark mock-up (docs/make_demo_gif.py). */
+        face_state.line_color = lv_color_make(122, 137, 160);
+        face_state.eye_border_width = 0;
+    }
+    else
+    {
+        face_state.line_color = lv_color_make(80, 60, 40);
+        face_state.eye_border_width = (uint8_t) fs(3);
+    }
+    face_state.line_width = (uint8_t) fs(4);
+
     face_state.eye_cw = (uint16_t)(face_sz * 0.45f);
-    face_state.mouth_cw = (uint16_t)(face_sz * 0.45f);
+    /* Wide enough to hold the cheeks beside the mouth, where the GIF puts
+     * them (+/-0.354 of the face). The eye canvases end at 0.57 of the
+     * face and this one starts at 0.62, so nothing overlaps. */
+    face_state.mouth_cw = (uint16_t)(face_sz * 0.70f);
     face_state.mouth_ch = (uint16_t)(face_sz * 0.38f);
 
     FACE_LOGI(TAG, "Parent: %dx%d, face_sz: %u, eye: %upx, mouth: %ux%upx",
@@ -202,7 +377,10 @@ esp_err_t face_animation_init(face_config_t *config)
 
     if (!face_state.left_eye_buf || !face_state.right_eye_buf || !face_state.mouth_buf)
     {
-        FACE_LOGE(TAG, "Failed to allocate canvas buffers");
+        FACE_LOGE(TAG, "Failed to allocate canvas buffers (%u + %u bytes)",
+                  (unsigned)(2 * eye_buf_size * sizeof(lv_color_t)),
+                  (unsigned)(mouth_buf_size * sizeof(lv_color_t)));
+        face_init_cleanup();
         face_unlock();
         return ESP_ERR_NO_MEM;
     }
@@ -247,6 +425,7 @@ esp_err_t face_animation_init(face_config_t *config)
     face_state.bounce_offset = 0;
     face_state.sparkle_phase = 0;
     face_state.heart_beat_phase = 0;
+    face_state.redraw_pending = false;
 
     draw_eye(face_state.left_eye_canvas, face_state.left_eye_openness, true);
     draw_eye(face_state.right_eye_canvas, face_state.right_eye_openness, false);
@@ -255,6 +434,13 @@ esp_err_t face_animation_init(face_config_t *config)
     face_state.anim_timer = lv_timer_create(animation_timer_cb,
                                             face_state.config.animation_speed,
                                             NULL);
+    if (face_state.anim_timer == NULL)
+    {
+        FACE_LOGE(TAG, "Failed to create the animation timer");
+        face_init_cleanup();
+        face_unlock();
+        return ESP_ERR_NO_MEM;
+    }
 
     face_unlock();
 
@@ -272,26 +458,28 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
     uint16_t width = face_state.eye_cw;
     uint16_t height = face_state.eye_cw;
 
-    lv_canvas_fill_bg(canvas, lv_color_white(), LV_OPA_COVER);
+    lv_canvas_fill_bg(canvas, face_state.bg_color, LV_OPA_COVER);
 
     lv_layer_t layer;
     lv_canvas_init_layer(canvas, &layer);
 
-    int16_t eye_width = width * 0.75;
+    /* GIF: the eye white is 17% of the frame; 0.75 put it at 20.6%.
+     * Smaller also frees the room the cheeks need underneath. */
+    int16_t eye_width = width * 0.68;
     int16_t eye_height = (eye_width * openness) / 100;
-    if (eye_height < 8)
-        eye_height = 8;
+    if (eye_height < fs(8))
+        eye_height = fs(8);
     int16_t center_x = width / 2;
-    int16_t center_y = (height * 0.6) + face_state.bounce_offset;
+    int16_t center_y = (height * 0.52f) + face_state.bounce_offset;
 
     lv_draw_line_dsc_t line_dsc;
     lv_draw_line_dsc_init(&line_dsc);
-    line_dsc.color = lv_color_make(80, 60, 40);
-    line_dsc.width = 4;
+    line_dsc.color = face_state.line_color;
+    line_dsc.width = face_state.line_width;
     line_dsc.opa = LV_OPA_COVER;
 
     int8_t eyebrow_angle = is_left ? face_state.left_eyebrow_angle : face_state.right_eyebrow_angle;
-    int16_t eyebrow_y = center_y - eye_width / 2 - 6 + face_state.eyebrow_height;
+    int16_t eyebrow_y = center_y - eye_width / 2 - fs(6) + face_state.eyebrow_height;
     int16_t eyebrow_width = eye_width * 0.9;
 
     float angle_rad = eyebrow_angle * 3.14159 / 180.0;
@@ -317,23 +505,6 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
 
     lv_draw_line(&layer, &line_dsc);
 
-    if (face_state.blush_intensity > 0)
-    {
-        lv_draw_rect_dsc_t blush_dsc;
-        lv_draw_rect_dsc_init(&blush_dsc);
-        blush_dsc.bg_color = lv_color_make(255, 150, 180);
-        blush_dsc.bg_opa = (face_state.blush_intensity * LV_OPA_COVER) / 100;
-        blush_dsc.radius = 8;
-        blush_dsc.border_width = 0;
-
-        lv_area_t blush_area;
-        blush_area.x1 = center_x - 10;
-        blush_area.y1 = center_y + eye_width / 2 + 2;
-        blush_area.x2 = center_x + 10;
-        blush_area.y2 = center_y + eye_width / 2 + 8;
-
-        lv_draw_rect(&layer, &blush_dsc, &blush_area);
-    }
 
     lv_draw_rect_dsc_t rect_dsc;
     lv_draw_rect_dsc_init(&rect_dsc);
@@ -438,7 +609,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         {
             rect_dsc.bg_color = lv_color_make(255, 240, 100);
             rect_dsc.bg_opa = (face_state.sparkle_phase * LV_OPA_COVER) / 100;
-            rect_dsc.radius = 2;
+            rect_dsc.radius = fs(2);
 
             for (int i = 0; i < 6; i++)
             {
@@ -448,10 +619,10 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
                 int16_t spark_y = center_y + spark_dist * sin(angle) * 0.85;
 
                 lv_area_t spark_area;
-                spark_area.x1 = spark_x - 2;
-                spark_area.y1 = spark_y - 2;
-                spark_area.x2 = spark_x + 2;
-                spark_area.y2 = spark_y + 2;
+                spark_area.x1 = spark_x - fs(2);
+                spark_area.y1 = spark_y - fs(2);
+                spark_area.x2 = spark_x + fs(2);
+                spark_area.y2 = spark_y + fs(2);
 
                 lv_draw_rect(&layer, &rect_dsc, &spark_area);
             }
@@ -463,9 +634,10 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         rect_dsc.bg_color = lv_color_white();
         rect_dsc.bg_opa = LV_OPA_COVER;
         rect_dsc.border_color = lv_color_black();
-        rect_dsc.border_width = 3;
+        rect_dsc.border_width = face_state.eye_border_width;
         rect_dsc.border_opa = LV_OPA_COVER;
-        rect_dsc.radius = 15;
+        /* Round, as in the demo GIF; upstream's fixed 15px read as a squircle. */
+        rect_dsc.radius = LV_RADIUS_CIRCLE;
 
         lv_area_t eye_area;
         eye_area.x1 = center_x - eye_width / 2;
@@ -485,27 +657,27 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
             int16_t iris_center_x = center_x + face_state.pupil_offset_x;
             int16_t iris_center_y = center_y + face_state.pupil_offset_y;
 
-            if (iris_center_x - iris_width / 2 < center_x - eye_width / 2 + 3)
+            if (iris_center_x - iris_width / 2 < center_x - eye_width / 2 + fs(3))
             {
-                iris_center_x = center_x - eye_width / 2 + iris_width / 2 + 3;
+                iris_center_x = center_x - eye_width / 2 + iris_width / 2 + fs(3);
             }
-            if (iris_center_x + iris_width / 2 > center_x + eye_width / 2 - 3)
+            if (iris_center_x + iris_width / 2 > center_x + eye_width / 2 - fs(3))
             {
-                iris_center_x = center_x + eye_width / 2 - iris_width / 2 - 3;
+                iris_center_x = center_x + eye_width / 2 - iris_width / 2 - fs(3);
             }
-            if (iris_center_y - iris_height / 2 < center_y - eye_height / 2 + 3)
+            if (iris_center_y - iris_height / 2 < center_y - eye_height / 2 + fs(3))
             {
-                iris_center_y = center_y - eye_height / 2 + iris_height / 2 + 3;
+                iris_center_y = center_y - eye_height / 2 + iris_height / 2 + fs(3);
             }
-            if (iris_center_y + iris_height / 2 > center_y + eye_height / 2 - 3)
+            if (iris_center_y + iris_height / 2 > center_y + eye_height / 2 - fs(3))
             {
-                iris_center_y = center_y + eye_height / 2 - iris_height / 2 - 3;
+                iris_center_y = center_y + eye_height / 2 - iris_height / 2 - fs(3);
             }
 
             rect_dsc.bg_color = lv_color_make(50, 180, 255);
-            rect_dsc.border_width = 2;
+            rect_dsc.border_width = fs(2);
             rect_dsc.border_color = lv_color_make(30, 140, 230);
-            rect_dsc.radius = 8;
+            rect_dsc.radius = LV_RADIUS_CIRCLE;
 
             lv_area_t iris_area;
             iris_area.x1 = iris_center_x - iris_width / 2;
@@ -519,7 +691,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
             int16_t pupil_height = iris_height * 0.6;
             rect_dsc.bg_color = lv_color_black();
             rect_dsc.border_width = 0;
-            rect_dsc.radius = 6;
+            rect_dsc.radius = LV_RADIUS_CIRCLE;
 
             lv_area_t pupil_area;
             pupil_area.x1 = iris_center_x - pupil_width / 2;
@@ -537,7 +709,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
                 highlight_h = 4;
 
             rect_dsc.bg_color = lv_color_white();
-            rect_dsc.radius = 3;
+            rect_dsc.radius = fs(3);
 
             lv_area_t highlight_area;
             highlight_area.x1 = iris_center_x - pupil_width / 3 - highlight_w / 2;
@@ -554,7 +726,7 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
             if (small_h < 2)
                 small_h = 2;
 
-            rect_dsc.radius = 2;
+            rect_dsc.radius = fs(2);
 
             highlight_area.x1 = iris_center_x + pupil_width / 4 - small_w / 2;
             highlight_area.y1 = iris_center_y - pupil_height / 4 - small_h / 2;
@@ -569,19 +741,19 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
             rect_dsc.bg_color = lv_color_make(255, 255, 100);
             rect_dsc.bg_opa = (face_state.sparkle_phase * LV_OPA_COVER) / 100;
             rect_dsc.border_width = 0;
-            rect_dsc.radius = 2;
+            rect_dsc.radius = fs(2);
 
             for (int i = 0; i < 3; i++)
             {
                 float angle = (i * 120 + face_state.sparkle_phase * 3.6) * 3.14159 / 180.0;
-                int16_t spark_x = center_x + (eye_width / 2 + 8) * cos(angle);
-                int16_t spark_y = center_y + (eye_width / 2 + 8) * sin(angle);
+                int16_t spark_x = center_x + (eye_width / 2 + fs(8)) * cos(angle);
+                int16_t spark_y = center_y + (eye_width / 2 + fs(8)) * sin(angle);
 
                 lv_area_t spark_area;
-                spark_area.x1 = spark_x - 2;
-                spark_area.y1 = spark_y - 2;
-                spark_area.x2 = spark_x + 2;
-                spark_area.y2 = spark_y + 2;
+                spark_area.x1 = spark_x - fs(2);
+                spark_area.y1 = spark_y - fs(2);
+                spark_area.x2 = spark_x + fs(2);
+                spark_area.y2 = spark_y + fs(2);
 
                 lv_draw_rect(&layer, &rect_dsc, &spark_area);
             }
@@ -590,16 +762,34 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
     else
     {
 
-        line_dsc.color = lv_color_black();
-        line_dsc.width = 4;
+        /* Closed / almost-closed eye. The GIF arcs it upward (d.arc 200..340
+         * in EYE white) — the cute shut eye; a straight line read as a dash,
+         * and in black it vanished outright on a dark panel. */
+        line_dsc.color = lv_color_white();
+        line_dsc.width = face_state.line_width + fs(2);
         line_dsc.opa = LV_OPA_COVER;
         line_dsc.round_start = 1;
         line_dsc.round_end = 1;
 
-        line_dsc.p1.x = center_x - eye_width / 2;
-        line_dsc.p1.y = center_y;
-        line_dsc.p2.x = center_x + eye_width / 2;
-        line_dsc.p2.y = center_y;
+        {
+            const float rx = eye_width / 2.0f;
+            const float ry = eye_width * 0.30f;
+            float prev_x = center_x + rx * cosf(200.0f * 3.14159f / 180.0f);
+            float prev_y = center_y + ry * sinf(200.0f * 3.14159f / 180.0f);
+            for (int i = 1; i <= 12; i++)
+            {
+                float a = (200.0f + (140.0f * i) / 12.0f) * 3.14159f / 180.0f;
+                float x = center_x + rx * cosf(a);
+                float y = center_y + ry * sinf(a);
+                line_dsc.p1.x = (int32_t) prev_x;
+                line_dsc.p1.y = (int32_t) prev_y;
+                line_dsc.p2.x = (int32_t) x;
+                line_dsc.p2.y = (int32_t) y;
+                lv_draw_line(&layer, &line_dsc);
+                prev_x = x;
+                prev_y = y;
+            }
+        }
         lv_draw_line(&layer, &line_dsc);
 
         line_dsc.width = 2;
@@ -653,9 +843,9 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         sweat_dsc.bg_color = lv_color_make(120, 200, 255);
         sweat_dsc.bg_opa = is_working ? LV_OPA_90 : LV_OPA_70;
         sweat_dsc.border_color = lv_color_make(80, 150, 240);
-        sweat_dsc.border_width = 1;
+        sweat_dsc.border_width = fs(1);
         sweat_dsc.border_opa = LV_OPA_60;
-        sweat_dsc.radius = 6;
+        sweat_dsc.radius = fs(6);
 
         lv_area_t drop_area;
         drop_area.x1 = drop_x - drop_w;
@@ -667,12 +857,12 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         sweat_dsc.bg_color = lv_color_white();
         sweat_dsc.bg_opa = LV_OPA_80;
         sweat_dsc.border_width = 0;
-        sweat_dsc.radius = 3;
+        sweat_dsc.radius = fs(3);
 
         lv_area_t shine_area;
         int16_t shine_w = is_working ? 2 : 1;
         shine_area.x1 = drop_x - shine_w;
-        shine_area.y1 = drop_y - drop_top + 2;
+        shine_area.y1 = drop_y - drop_top + fs(2);
         shine_area.x2 = drop_x;
         shine_area.y2 = drop_y - drop_top + (is_working ? 5 : 4);
         lv_draw_rect(&layer, &sweat_dsc, &shine_area);
@@ -686,16 +876,16 @@ static void draw_eye(lv_obj_t *canvas, uint8_t openness, bool is_left)
         rect_dsc.bg_color = lv_color_make(150, 200, 255);
         rect_dsc.bg_opa = LV_OPA_80;
         rect_dsc.border_width = 0;
-        rect_dsc.radius = 5;
+        rect_dsc.radius = fs(5);
 
         int16_t tear_x = center_x + (is_left ? -eye_width / 3 : eye_width / 3);
         int16_t tear_y = center_y + eye_height / 2 + 5 + face_state.tear_fall_offset;
 
         lv_area_t tear_area;
-        tear_area.x1 = tear_x - 3;
-        tear_area.y1 = tear_y - 5;
-        tear_area.x2 = tear_x + 3;
-        tear_area.y2 = tear_y + 5;
+        tear_area.x1 = tear_x - fs(3);
+        tear_area.y1 = tear_y - fs(5);
+        tear_area.x2 = tear_x + fs(3);
+        tear_area.y2 = tear_y + fs(5);
         lv_draw_rect(&layer, &rect_dsc, &tear_area);
 
         line_dsc.color = lv_color_make(150, 200, 255);
@@ -722,13 +912,16 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
     uint16_t width = face_state.mouth_cw;
     uint16_t height = face_state.mouth_ch;
 
-    lv_canvas_fill_bg(canvas, lv_color_white(), LV_OPA_COVER);
+    lv_canvas_fill_bg(canvas, face_state.bg_color, LV_OPA_COVER);
 
     lv_layer_t layer;
     lv_canvas_init_layer(canvas, &layer);
 
     int16_t center_x = width / 2;
-    int16_t mouth_width = width * 0.85;
+    /* GIF: half-width RW*0.11 of the frame = 0.38 of the face. The canvas is
+     * now 0.70 of the face rather than 0.45, so the ratio drops to keep the
+     * mouth exactly the size it was. */
+    int16_t mouth_width = width * 0.546;
 
     int16_t curve_offset = (height * curve) / 140;
 
@@ -791,6 +984,76 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
     lv_draw_line_dsc_t line_dsc;
     lv_draw_line_dsc_init(&line_dsc);
 
+    /* Speaking. Two sines of different periods keep it from looking like a
+     * metronome; the expression's eyes, brows and cheeks carry on underneath.
+     * Drawn before the cheeks so those stay on top, and returns early so the
+     * emotion's own mouth is skipped entirely. */
+    if (face_state.talking)
+    {
+        float p = face_state.talk_phase * 0.2f;
+        float open = 0.45f + 0.35f * sinf(p) + 0.20f * sinf(p * 2.7f);
+        if (open < 0.10f)
+            open = 0.10f;
+        if (open > 1.0f)
+            open = 1.0f;
+
+        lv_draw_rect_dsc_t talk_dsc;
+        lv_draw_rect_dsc_init(&talk_dsc);
+        talk_dsc.bg_color = lv_color_make(150, 40, 60);
+        talk_dsc.bg_opa = LV_OPA_COVER;
+        talk_dsc.border_width = 0;
+        talk_dsc.radius = LV_RADIUS_CIRCLE;
+
+        int16_t talk_hw = (int16_t)(mouth_width * 0.22f);
+        int16_t talk_hh = (int16_t)(mouth_width * 0.05f + mouth_width * 0.17f * open);
+
+        lv_area_t talk_area;
+        talk_area.x1 = center_x - talk_hw;
+        talk_area.y1 = center_y - talk_hh;
+        talk_area.x2 = center_x + talk_hw;
+        talk_area.y2 = center_y + talk_hh;
+        lv_draw_rect(&layer, &talk_dsc, &talk_area);
+
+        lv_canvas_finish_layer(canvas, &layer);
+        return;
+    }
+
+    /* Cheeks. The GIF blushes happy, love and wink only, and places the
+     * patches either side of the mouth. They used to be drawn in the eye
+     * canvas, which had room for nothing but a flat clipped sliver under the
+     * eye — the wrong place and the wrong shape. */
+    if (face_state.blush_intensity > 0 &&
+        (face_state.current_emotion == FACE_HAPPY ||
+         face_state.current_emotion == FACE_LOVE ||
+         face_state.current_emotion == FACE_WINK))
+    {
+        lv_draw_rect_dsc_t blush_dsc;
+        lv_draw_rect_dsc_init(&blush_dsc);
+        blush_dsc.bg_color = lv_color_make(255, 150, 180);
+        /* GIF: alpha 210 * blush, which blends to a muted mauve. */
+        blush_dsc.bg_opa = (face_state.blush_intensity * LV_OPA_COVER) / 140;
+        blush_dsc.border_width = 0;
+        blush_dsc.radius = LV_RADIUS_CIRCLE;
+
+        /* The mouth reaches 0.273 of the canvas and its edge is at 0.50, so
+         * the cheeks live in the band between. 0.10 x 0.12 gives the GIF's
+         * 1.6 width-to-height ratio. */
+        int16_t cheek_hw = width * 0.10f;
+        int16_t cheek_hh = height * 0.12f;
+        int16_t cheek_dx = width * 0.39f;
+
+        for (int i = 0; i < 2; i++)
+        {
+            int16_t ccx = center_x + ((i == 0) ? -cheek_dx : cheek_dx);
+            lv_area_t cheek;
+            cheek.x1 = ccx - cheek_hw;
+            cheek.y1 = center_y - cheek_hh;
+            cheek.x2 = ccx + cheek_hw;
+            cheek.y2 = center_y + cheek_hh;
+            lv_draw_rect(&layer, &blush_dsc, &cheek);
+        }
+    }
+
     if (face_state.current_emotion == FACE_WORKING_HARD)
     {
         int16_t mouth_h = height * 0.28;
@@ -805,9 +1068,9 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         rect_dsc.bg_color = lv_color_make(200, 60, 80);
         rect_dsc.bg_opa = LV_OPA_COVER;
         rect_dsc.border_color = lv_color_black();
-        rect_dsc.border_width = 3;
+        rect_dsc.border_width = fs(3);
         rect_dsc.border_opa = LV_OPA_COVER;
-        rect_dsc.radius = 8;
+        rect_dsc.radius = fs(8);
 
         lv_area_t mouth_area;
         mouth_area.x1 = center_x - grip_width / 2;
@@ -820,7 +1083,7 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         rect_dsc.bg_color = lv_color_make(245, 245, 240);
         rect_dsc.bg_opa = LV_OPA_90;
         rect_dsc.border_width = 0;
-        rect_dsc.radius = 3;
+        rect_dsc.radius = fs(3);
 
         lv_area_t teeth_area;
         teeth_area.x1 = mouth_area.x1 + t_margin;
@@ -853,28 +1116,17 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         int16_t mouth_h = height * 0.5;
         int16_t adjusted_y = center_y + (curve_offset / 2);
 
-        rect_dsc.bg_color = lv_color_make(220, 60, 80);
-        rect_dsc.bg_opa = LV_OPA_90;
-        rect_dsc.border_color = lv_color_black();
-        rect_dsc.border_width = 3;
-        rect_dsc.border_opa = LV_OPA_COVER;
-        rect_dsc.radius = 12;
-
-        lv_area_t mouth_area;
-        mouth_area.x1 = center_x - mouth_width / 2;
-        mouth_area.y1 = adjusted_y - mouth_h / 2;
-        mouth_area.x2 = center_x + mouth_width / 2;
-        mouth_area.y2 = adjusted_y + mouth_h / 2;
-
-        lv_draw_rect(&layer, &rect_dsc, &mouth_area);
+        draw_mouth_curve(&layer, center_x, adjusted_y, mouth_width / 2,
+                         (int16_t)((height * 0.367f * curve) / 100),
+                         (int16_t)(height * 0.11f));
 
         if (curve > 100)
         {
             rect_dsc.bg_color = lv_color_make(255, 140, 160);
             rect_dsc.bg_opa = LV_OPA_90;
             rect_dsc.border_color = lv_color_make(200, 80, 100);
-            rect_dsc.border_width = 2;
-            rect_dsc.radius = 8;
+            rect_dsc.border_width = fs(2);
+            rect_dsc.radius = fs(8);
 
             lv_area_t tongue_area;
             int16_t tongue_w = mouth_width / 5;
@@ -890,19 +1142,19 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         {
             rect_dsc.bg_color = lv_color_make(255, 255, 180);
             rect_dsc.bg_opa = LV_OPA_60;
-            rect_dsc.radius = 2;
+            rect_dsc.radius = fs(2);
 
             for (int i = 0; i < 2; i++)
             {
                 int16_t side = (i == 0) ? -1 : 1;
-                int16_t spark_x = center_x + side * (mouth_width / 2 + 8);
+                int16_t spark_x = center_x + side * (mouth_width / 2 + fs(8));
                 int16_t spark_y = adjusted_y;
 
                 lv_area_t spark_area;
-                spark_area.x1 = spark_x - 2;
-                spark_area.y1 = spark_y - 2;
-                spark_area.x2 = spark_x + 2;
-                spark_area.y2 = spark_y + 2;
+                spark_area.x1 = spark_x - fs(2);
+                spark_area.y1 = spark_y - fs(2);
+                spark_area.x2 = spark_x + fs(2);
+                spark_area.y2 = spark_y + fs(2);
                 lv_draw_rect(&layer, &rect_dsc, &spark_area);
             }
         }
@@ -911,65 +1163,68 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
     else if (curve > 35 && curve < 65)
     {
 
-        float diamond_factor = face_state.diamond_mouth_phase / 100.0;
+        /* The GIF's open mouth is a round O; the diamond built from four
+         * rects read as a red cross on screen. Keep the oval only. */
+        float diamond_factor = 0.0f;
+        (void) face_state.diamond_mouth_phase;
 
         if (diamond_factor > 0.3)
         {
 
-            int16_t stretch = 3 + (diamond_factor * 8);
+            int16_t stretch = fs(3) + (diamond_factor * fs(8));
 
             rect_dsc.bg_color = lv_color_make(200, 70, 90);
             rect_dsc.bg_opa = LV_OPA_90;
             rect_dsc.border_color = lv_color_black();
-            rect_dsc.border_width = 3;
+            rect_dsc.border_width = fs(3);
             rect_dsc.border_opa = LV_OPA_COVER;
-            rect_dsc.radius = 4;
+            rect_dsc.radius = fs(4);
 
             lv_area_t diamond_area;
-            diamond_area.x1 = center_x - 6;
-            diamond_area.y1 = center_y + curve_offset - stretch - 6;
-            diamond_area.x2 = center_x + 6;
-            diamond_area.y2 = center_y + curve_offset - 2;
+            diamond_area.x1 = center_x - fs(6);
+            diamond_area.y1 = center_y + curve_offset - stretch - fs(6);
+            diamond_area.x2 = center_x + fs(6);
+            diamond_area.y2 = center_y + curve_offset - fs(2);
             lv_draw_rect(&layer, &rect_dsc, &diamond_area);
 
-            diamond_area.x1 = center_x + 2;
-            diamond_area.y1 = center_y + curve_offset - 6;
-            diamond_area.x2 = center_x + stretch + 6;
-            diamond_area.y2 = center_y + curve_offset + 6;
+            diamond_area.x1 = center_x + fs(2);
+            diamond_area.y1 = center_y + curve_offset - fs(6);
+            diamond_area.x2 = center_x + stretch + fs(6);
+            diamond_area.y2 = center_y + curve_offset + fs(6);
             lv_draw_rect(&layer, &rect_dsc, &diamond_area);
 
-            diamond_area.x1 = center_x - 6;
-            diamond_area.y1 = center_y + curve_offset + 2;
-            diamond_area.x2 = center_x + 6;
-            diamond_area.y2 = center_y + curve_offset + stretch + 6;
+            diamond_area.x1 = center_x - fs(6);
+            diamond_area.y1 = center_y + curve_offset + fs(2);
+            diamond_area.x2 = center_x + fs(6);
+            diamond_area.y2 = center_y + curve_offset + stretch + fs(6);
             lv_draw_rect(&layer, &rect_dsc, &diamond_area);
 
-            diamond_area.x1 = center_x - stretch - 6;
-            diamond_area.y1 = center_y + curve_offset - 6;
-            diamond_area.x2 = center_x - 2;
-            diamond_area.y2 = center_y + curve_offset + 6;
+            diamond_area.x1 = center_x - stretch - fs(6);
+            diamond_area.y1 = center_y + curve_offset - fs(6);
+            diamond_area.x2 = center_x - fs(2);
+            diamond_area.y2 = center_y + curve_offset + fs(6);
             lv_draw_rect(&layer, &rect_dsc, &diamond_area);
 
             rect_dsc.border_width = 0;
-            rect_dsc.radius = 2;
-            diamond_area.x1 = center_x - 4;
-            diamond_area.y1 = center_y + curve_offset - 4;
-            diamond_area.x2 = center_x + 4;
-            diamond_area.y2 = center_y + curve_offset + 4;
+            rect_dsc.radius = fs(2);
+            diamond_area.x1 = center_x - fs(4);
+            diamond_area.y1 = center_y + curve_offset - fs(4);
+            diamond_area.x2 = center_x + fs(4);
+            diamond_area.y2 = center_y + curve_offset + fs(4);
             lv_draw_rect(&layer, &rect_dsc, &diamond_area);
         }
         else
         {
 
-            int16_t mouth_width_oval = mouth_width / 3.5;
-            int16_t mouth_height_oval = mouth_width / 4;
+            /* GIF: ellipse of RW*0.16 x RH*0.15 of the frame. */
+            int16_t mouth_width_oval = mouth_width / 2.6;
+            int16_t mouth_height_oval = mouth_width / 2.9;
 
-            rect_dsc.bg_color = lv_color_make(200, 70, 90);
-            rect_dsc.bg_opa = LV_OPA_90;
-            rect_dsc.border_color = lv_color_black();
-            rect_dsc.border_width = 3;
-            rect_dsc.border_opa = LV_OPA_COVER;
-            rect_dsc.radius = 8;
+            rect_dsc.bg_color = lv_color_make(150, 40, 60);
+            rect_dsc.bg_opa = LV_OPA_COVER;
+            rect_dsc.border_width = 0;
+            /* A true round O, as the GIF draws it. */
+            rect_dsc.radius = LV_RADIUS_CIRCLE;
 
             lv_area_t mouth_area;
             mouth_area.x1 = center_x - mouth_width_oval;
@@ -983,7 +1238,7 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         rect_dsc.bg_color = lv_color_make(255, 255, 150);
         rect_dsc.bg_opa = LV_OPA_70;
         rect_dsc.border_width = 0;
-        rect_dsc.radius = 2;
+        rect_dsc.radius = fs(2);
 
         for (int i = 0; i < 4; i++)
         {
@@ -992,10 +1247,10 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
             int16_t spark_y = center_y + curve_offset + (mouth_width / 3) * sin(angle);
 
             lv_area_t spark_area;
-            spark_area.x1 = spark_x - 2;
-            spark_area.y1 = spark_y - 2;
-            spark_area.x2 = spark_x + 2;
-            spark_area.y2 = spark_y + 2;
+            spark_area.x1 = spark_x - fs(2);
+            spark_area.y1 = spark_y - fs(2);
+            spark_area.x2 = spark_x + fs(2);
+            spark_area.y2 = spark_y + fs(2);
             lv_draw_rect(&layer, &rect_dsc, &spark_area);
         }
     }
@@ -1005,27 +1260,16 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
         int16_t mouth_h = height * 0.35;
         int16_t adjusted_y = center_y + (curve_offset / 2);
 
-        rect_dsc.bg_color = lv_color_make(180, 50, 70);
-        rect_dsc.bg_opa = LV_OPA_90;
-        rect_dsc.border_color = lv_color_black();
-        rect_dsc.border_width = 3;
-        rect_dsc.border_opa = LV_OPA_COVER;
-        rect_dsc.radius = 8;
+        draw_mouth_curve(&layer, center_x, adjusted_y, mouth_width / 2,
+                         (int16_t)((height * 0.367f * curve) / 100),
+                         (int16_t)(height * 0.11f));
 
-        lv_area_t mouth_area;
-        mouth_area.x1 = center_x - mouth_width / 2;
-        mouth_area.y1 = adjusted_y;
-        mouth_area.x2 = center_x + mouth_width / 2;
-        mouth_area.y2 = adjusted_y + mouth_h;
-
-        lv_draw_rect(&layer, &rect_dsc, &mouth_area);
-
-        if (curve < -50)
+        if (curve < -50 && face_state.current_emotion == FACE_CRY)
         {
             rect_dsc.bg_color = lv_color_make(150, 200, 255);
             rect_dsc.bg_opa = LV_OPA_70;
             rect_dsc.border_width = 0;
-            rect_dsc.radius = 4;
+            rect_dsc.radius = fs(4);
 
             int16_t tear_base_y = center_y - 8;
             int16_t tear_y = tear_base_y + face_state.tear_fall_offset;
@@ -1033,17 +1277,17 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
             int16_t tear_x_left = center_x - mouth_width / 2 - 10;
 
             lv_area_t tear_area;
-            tear_area.x1 = tear_x_left - 4;
-            tear_area.y1 = tear_y - 4;
-            tear_area.x2 = tear_x_left + 4;
-            tear_area.y2 = tear_y + 4;
+            tear_area.x1 = tear_x_left - fs(4);
+            tear_area.y1 = tear_y - fs(4);
+            tear_area.x2 = tear_x_left + fs(4);
+            tear_area.y2 = tear_y + fs(4);
             lv_draw_rect(&layer, &rect_dsc, &tear_area);
 
             int16_t tear_x_right = center_x + mouth_width / 2 + 10;
-            tear_area.x1 = tear_x_right - 4;
-            tear_area.y1 = tear_y - 4;
-            tear_area.x2 = tear_x_right + 4;
-            tear_area.y2 = tear_y + 4;
+            tear_area.x1 = tear_x_right - fs(4);
+            tear_area.y1 = tear_y - fs(4);
+            tear_area.x2 = tear_x_right + fs(4);
+            tear_area.y2 = tear_y + fs(4);
             lv_draw_rect(&layer, &rect_dsc, &tear_area);
 
             line_dsc.color = lv_color_make(150, 200, 255);
@@ -1068,8 +1312,10 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
 
     else
     {
-        int16_t mouth_h = height * 0.28;
-        int16_t smile_width = mouth_width * 0.65;
+        /* GIF strokes the mouth (width 7px on a 300 frame) instead of
+         * filling a slab; height * 0.28 read as a fat lozenge. */
+        int16_t mouth_h = height * 0.11;
+        int16_t smile_width = mouth_width * 0.92;
 
         bool is_slight_smile = (curve > 5);
 
@@ -1086,18 +1332,9 @@ static void draw_mouth(lv_obj_t *canvas, int8_t curve)
             rect_dsc.bg_opa = LV_OPA_90;
         }
 
-        rect_dsc.border_color = lv_color_black();
-        rect_dsc.border_width = 2;
-        rect_dsc.border_opa = LV_OPA_COVER;
-        rect_dsc.radius = 6;
-
-        lv_area_t mouth_area;
-        mouth_area.x1 = center_x - smile_width / 2;
-        mouth_area.y1 = center_y;
-        mouth_area.x2 = center_x + smile_width / 2;
-        mouth_area.y2 = center_y + mouth_h;
-
-        lv_draw_rect(&layer, &rect_dsc, &mouth_area);
+        (void) is_slight_smile;
+        draw_mouth_curve(&layer, center_x, center_y, smile_width / 2,
+                         (int16_t)((height * 0.367f * curve) / 100), mouth_h);
     }
 
     lv_canvas_finish_layer(canvas, &layer);
@@ -1404,6 +1641,17 @@ static void animation_timer_cb(lv_timer_t *timer)
     static uint32_t pupil_counter = 0;
     bounce_counter++;
     pupil_counter++;
+
+    if (face_state.talking)
+    {
+        face_state.talk_phase++;
+        needs_redraw = true;
+    }
+
+    /* A held gaze expires on its own so the eyes go back to wandering. */
+    if (face_state.gaze_active && face_state.gaze_until != 0 &&
+        (int32_t)(current_time - face_state.gaze_until) >= 0)
+        face_state.gaze_active = false;
 
     switch (face_state.current_emotion)
     {
@@ -1934,6 +2182,17 @@ static void animation_timer_cb(lv_timer_t *timer)
         break;
     }
 
+    /* Applied after the per-emotion drift above, so it wins. */
+    if (face_state.gaze_active)
+    {
+        int8_t gx = (int8_t)((face_state.gaze_x * 9) / 100);
+        int8_t gy = (int8_t)((face_state.gaze_y * 6) / 100);
+        if (face_state.pupil_offset_x != gx || face_state.pupil_offset_y != gy)
+            needs_redraw = true;
+        face_state.pupil_offset_x = gx;
+        face_state.pupil_offset_y = gy;
+    }
+
     if (face_state.current_emotion == FACE_NEUTRAL ||
         face_state.current_emotion == FACE_ANGRY ||
         face_state.current_emotion == FACE_SAD ||
@@ -1953,23 +2212,16 @@ static void animation_timer_cb(lv_timer_t *timer)
         }
     }
 
-    if (face_state.current_emotion != FACE_LOVE)
+    /* Fade the hearts out after leaving FACE_LOVE. heart_beat_phase is
+     * unsigned, so subtracting past zero used to wrap around to ~250, which
+     * the >= 100 branch then clamped back to full — the hearts flared up again
+     * instead of disappearing. Saturate at zero instead. */
+    if (face_state.current_emotion != FACE_LOVE && face_state.heart_beat_phase > 0)
     {
-        if (face_state.heart_beat_phase > 0)
-        {
-            static int8_t heart_direction = -1;
-            face_state.heart_beat_phase += heart_direction * 5;
-            if (face_state.heart_beat_phase <= 0)
-            {
-                face_state.heart_beat_phase = 0;
-                heart_direction = 1;
-            }
-            else if (face_state.heart_beat_phase >= 100)
-            {
-                face_state.heart_beat_phase = 100;
-                heart_direction = -1;
-            }
-        }
+        face_state.heart_beat_phase = (face_state.heart_beat_phase >= 5)
+                                          ? face_state.heart_beat_phase - 5
+                                          : 0;
+        needs_redraw = true;
     }
 
     if (face_state.transition_progress < 100 && face_state.blush_intensity > 0)
@@ -1977,8 +2229,20 @@ static void animation_timer_cb(lv_timer_t *timer)
         needs_redraw = true;
     }
 
-    if (needs_redraw)
+    /* Redrawing a canvas invalidates it, so an off-screen face would still
+     * push ~33 flushes per second through the display driver. Skip the draw
+     * while the face's page is not shown and catch up when it comes back —
+     * the animation state itself keeps running, only the pixels wait. */
+    bool visible = lv_obj_is_visible(face_state.face_container);
+    if (!visible)
     {
+        face_state.redraw_pending |= needs_redraw;
+        return;
+    }
+
+    if (needs_redraw || face_state.redraw_pending)
+    {
+        face_state.redraw_pending = false;
         draw_eye(face_state.left_eye_canvas, face_state.left_eye_openness, true);
         draw_eye(face_state.right_eye_canvas, face_state.right_eye_openness, false);
         draw_mouth(face_state.mouth_canvas, face_state.mouth_curve);
@@ -2094,6 +2358,40 @@ lv_obj_t *face_get_container(void)
     return face_state.initialized ? face_state.face_container : NULL;
 }
 
+void face_set_talking(bool talking)
+{
+    if (!face_state.initialized)
+        return;
+
+    face_state.talking = talking;
+    if (!talking)
+        face_state.talk_phase = 0;
+
+    face_lock();
+    draw_mouth(face_state.mouth_canvas, face_state.mouth_curve);
+    face_unlock();
+}
+
+void face_set_gaze(int8_t dx, int8_t dy, uint32_t hold_ms)
+{
+    if (!face_state.initialized)
+        return;
+
+    if (dx > 100)
+        dx = 100;
+    if (dx < -100)
+        dx = -100;
+    if (dy > 100)
+        dy = 100;
+    if (dy < -100)
+        dy = -100;
+
+    face_state.gaze_x = dx;
+    face_state.gaze_y = dy;
+    face_state.gaze_active = true;
+    face_state.gaze_until = hold_ms ? (lv_tick_get() + hold_ms) : 0;
+}
+
 void face_animation_deinit(void)
 {
     if (!face_state.initialized)
@@ -2101,29 +2399,21 @@ void face_animation_deinit(void)
 
     face_lock();
 
+    /* Clear the flag first: the timer callback bails out on it, so a redraw
+     * cannot run against half-freed state. */
+    face_state.initialized = false;
+
     if (face_state.anim_timer)
     {
         lv_timer_del(face_state.anim_timer);
         face_state.anim_timer = NULL;
     }
 
-    if (face_state.left_eye_canvas)
-        lv_obj_del(face_state.left_eye_canvas);
-    if (face_state.right_eye_canvas)
-        lv_obj_del(face_state.right_eye_canvas);
-    if (face_state.mouth_canvas)
-        lv_obj_del(face_state.mouth_canvas);
-    if (face_state.face_container)
-        lv_obj_del(face_state.face_container);
+    /* Deleting the container deletes the canvases with it — deleting them
+     * individually first and then the container would touch freed objects. */
+    face_init_cleanup();
 
     face_unlock();
-
-    if (face_state.left_eye_buf)
-        free(face_state.left_eye_buf);
-    if (face_state.right_eye_buf)
-        free(face_state.right_eye_buf);
-    if (face_state.mouth_buf)
-        free(face_state.mouth_buf);
 
     memset(&face_state, 0, sizeof(face_state_t));
 
